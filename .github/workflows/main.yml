@@ -1,0 +1,43 @@
+name: Moto G Pure HID Build
+on: [workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Your Configs
+        uses: actions/checkout@v3
+
+      - name: Install Compiler and Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev
+
+      - name: Clone Motorola Source
+        run: |
+          git clone --depth=1 -b android-12-release-s3rh32.20-42-10-10-5-3 https://github.com source
+
+      - name: Prepare the Blueprint
+        run: |
+          # Use your running.config as the absolute base
+          cp running.config source/arch/arm64/configs/vendor/ellis_defconfig
+          
+          # Inject your HID changes from the other file
+          cat ellis_defconfig.config >> source/arch/arm64/configs/vendor/ellis_defconfig
+          
+          # Fix the Wi-Fi "Version Magic" (+ suffix)
+          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/vendor/ellis_defconfig
+
+      - name: Build the Kernel
+        run: |
+          cd source
+          # Generate the final .config
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ellis_defconfig
+          # Compile using all available CPU cores
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+
+      - name: Upload Finished Kernel
+        uses: actions/upload-artifact@v3
+        with:
+          name: moto-hid-kernel
+          path: source/out/arch/arm64/boot/Image.gz-dtb
