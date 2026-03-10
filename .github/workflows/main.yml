@@ -56,7 +56,7 @@ jobs:
         if: always()
         run: |
           mkdir -p final_output
-          find . -name "Image.gz-dtb" -type -exec cp {} final_output/ \;
+          find . -name "Image.gz-dtb" -exec cp {} final_output/ \;
           ls -R final_output
 
       - name: Upload Finished Kernel
