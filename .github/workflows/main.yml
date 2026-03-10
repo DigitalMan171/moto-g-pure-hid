@@ -37,7 +37,7 @@ jobs:
           cd source
           mkdir -p out
           cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
-          sed -i 's/CONFIG_CFG80211=y/CONFIG_CFG80211=n/' out/config
+          sed -i 's/CONFIG_CFG80211=y/CONFIG_CFG80211=n/' out/.config
           sed -i 's/CONFIG_WEXT_CORE=y/CONFIG_WEXT_CORE=n/' out/.config
           
           # Sync and Build using Legacy Clang (r383902)
