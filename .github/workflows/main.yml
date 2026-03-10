@@ -48,14 +48,14 @@ jobs:
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$(pwd)/../clang-toolchain/clang-r416183b/bin/aarch64-linux-gnu- \
             olddefconfig
           
           # Start the 20-minute compilation using the official Android Clang compiler
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$(pwd)/../clang-toolchain/clang-r416183b/bin/aarch64-linux-gnu- \
             -j$(nproc) Image.gz-dtb
 
       - name: Upload Finished Kernel
