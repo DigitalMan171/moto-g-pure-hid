@@ -8,36 +8,57 @@ jobs:
       - name: Checkout Your Configs
         uses: actions/checkout@v4
 
-      - name: Install Compiler and Tools
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev wget tar
+
+      - name: Install Official Android Clang
+        run: |
+          # Downloads the exact Clang version used for Android 12 (r416183b)
+          mkdir -p clang-llvm
+          wget https://android.googlesource.com
+          tar -C clang-llvm -xzf clang-r416183b.tar.gz
+          echo "$(pwd)/clang-llvm/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
-          # Fail-safe clone: tries your specific branch first, then falls back to the base release
-          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
+          # Fail-safe clone: tries your specific branch first, then falls back to base
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com source || \
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42 https://github.com source
 
       - name: Prepare the Blueprint
         run: |
-          # 1. Copy your master config as the new base
+          # 1. Use your master config as the base
           cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # 2. Append your HID modifications from your custom file
+          # 2. Append HID modifications from your custom file
           cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # 3. Apply the "Version Magic" fix to match your 4.19.191+ string
+          # 3. Apply the "Version Magic" fix (+) to match your 4.19.191+ string
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
 
       - name: Build the Kernel
         run: |
           cd source
           mkdir -p out
-          # Prepare the final configuration file
+          
+          # Manually place your modified blueprint into the build room
           cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          # Start the long compilation using all cloud CPU cores
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+          
+          # Sync the configuration using the Clang toolchain
+          make O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            olddefconfig
+          
+          # Start the 20-minute compilation using the official Android Clang compiler
+          make O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            -j$(nproc) Image.gz-dtb
 
       - name: Upload Finished Kernel
         uses: actions/upload-artifact@v4
