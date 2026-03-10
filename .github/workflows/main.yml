@@ -16,7 +16,7 @@ jobs:
       - name: Install Official Android Clang
         run: |
           # This is the 100% reliable way to get the Google toolchain
-          wget "https://android.googlesource.com/platform/prebuilts/clanghost/linux-x86/archive/refs/heads/master-kernal-build-2021/clang-r416183b.tar.gz" -0 clang.tar.gz
+          wget "https://android.googlesource.com/platform/prebuilts/clanghost/linux-x86/archive/refs/heads/master-kernal-build-2021/clang-r416183b.tar.gz" -O clang.tar.gz
           mkdir -p clang-llvm
           tar -C clang-llvm -xzf clang.tar.gz
           # This registers the compiler so the build script can find 'clang'
