@@ -49,9 +49,16 @@ jobs:
             KERNELRELEASE="4.19.191+" \
             -j$(nproc) Image.gz-dtb
 
+      - name: Search and Rescue Kernel
+        if: always()
+        run: |
+          mkdir -p final_output
+          find source -name "Image*" -type f -exec cp {} final_output/ \;
+          ls -R final_output
+        
       - name: Upload Finished Kernel
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: moto-hid-kernel
-          path: source/out/arch/arm64/boot/Image.gz-dtb
+          path: final_output/
