@@ -24,7 +24,7 @@ jobs:
           cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
           # 2. Append your HID modifications from your custom file
-          cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config .config
+          cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
           # 3. Apply the "Version Magic" fix to match your 4.19.191+ string
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
@@ -32,8 +32,9 @@ jobs:
       - name: Build the Kernel
         run: |
           cd source
+          mkdir -p out
           # Prepare the final configuration file
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ext_config/ellis_defconfig.config
+          cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           # Start the long compilation using all cloud CPU cores
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
