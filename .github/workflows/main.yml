@@ -15,25 +15,27 @@ jobs:
 
       - name: Clone Motorola Source
         run: |
-          git clone --depth=1 --branch android-12-release-s3rh32.20-42-10-4-11 https://github.com source
+          # Fail-safe clone: tries your specific branch first, then falls back to the base release
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com source || \
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42 https://github.com source
 
       - name: Prepare the Blueprint
         run: |
-          # Use your running.config as the absolute base
+          # 1. Copy your master config as the new base
           cp running.config source/arch/arm64/configs/vendor/ellis_defconfig
           
-          # Inject your HID changes from the other file
+          # 2. Append your HID modifications from your custom file
           cat ellis_defconfig.config >> source/arch/arm64/configs/vendor/ellis_defconfig
           
-          # Fix the Wi-Fi "Version Magic" (+ suffix)
+          # 3. Apply the "Version Magic" fix to match your 4.19.191+ string
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/vendor/ellis_defconfig
 
       - name: Build the Kernel
         run: |
           cd source
-          # Generate the final .config
+          # Prepare the final configuration file
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ellis_defconfig
-          # Compile using all available CPU cores
+          # Start the long compilation using all cloud CPU cores
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
 
       - name: Upload Finished Kernel
