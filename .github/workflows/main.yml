@@ -8,14 +8,21 @@ jobs:
       - name: Checkout Your Configs
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git
+
+      - name: Install Compatible Legacy Clang
+        run: |
+          # Use the Clang URL from Phase 2 below
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-toolchain
+          echo "$(pwd)/clang-toolchain/clang-r383902/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
-          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
+          # Use the Motorola URL from Phase 2 below
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.comMotorollaMobilityLLC/kernel-mtk.git source
 
       - name: Prepare the Blueprint
         run: |
@@ -28,14 +35,15 @@ jobs:
           cd source
           mkdir -p out
           cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
-          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make O=out ARCH=arm64 \
-          CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=aarch64-linux-gnu- \
-          KCFLAGS="-w -Wno-error -Wno-unused-label" \
-          -j$(nproc) Image.gz-dtb
           
+          # Sync and Build using Legacy Clang (r383902)
+          make O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KCFLAGS="-w -Wno-error" \
+            -j$(nproc) Image.gz-dtb
+
       - name: Upload Finished Kernel
         if: always()
         uses: actions/upload-artifact@v4
