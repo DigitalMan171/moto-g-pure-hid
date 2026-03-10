@@ -11,55 +11,39 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld
 
       - name: Install Compatible Legacy Clang
         run: |
-          # Use the Clang URL from Phase 2 below
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-toolchain
+          # Use https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 from the 'keys' below
+          git clone --depth=1 CLANG_URL clang-toolchain
           echo "$(pwd)/clang-toolchain/clang-r383902/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
-          # Use the Motorola URL from Phase 2 below
+          # Use MOTO_URL from the 'keys' below
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
       - name: Prepare the Blueprint
         run: |
           cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          sed -i 's/.*CONFIG_USB_CONFIGFS.*/CONFIG_USB_CONFIGFS=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          sed -i 's/.*CONFIG_USB_CONFIGFS_F_HID.*/CONFIG_USB_CONFIGFS_F_HID=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          sed -i 's/.*CONFIG_USB_CONFIGFS_F_FS.*/CONFIG_USB_CONFIGFS_F_FS=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          echo "CONFIG_USB_G_HID=y" >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
+          # Force HID settings
+          sed -i 's/CONFIG_USB_CONFIGFS=y/CONFIG_USB_CONFIGFS=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
+          sed -i 's/CONFIG_USB_CONFIGFS_F_HID=y/CONFIG_USB_CONFIGFS_F_HID=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
 
-      - name: Build the Kernel
+      - name: Build the Kernel Heart
         run: |
           cd source
           mkdir -p out
           cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
+          
+          # 1. Disable failing wifi modules to speed up build
           sed -i 's/CONFIG_CFG80211=y/CONFIG_CFG80211=n/' out/.config
-          sed -i 's/CONFIG_WEXT_CORE=y/CONFIG_WEXT_CORE=n/' out/.config
           
-          # Sync and Build using Legacy Clang (r383902)
-          make O=out ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-w -Wno-error" \
-            KERNELRELEASE="4.19.191+" \
-            -j$(nproc) Image.gz-dtb
-
-       - name: Build the Kernel Heart
-        # We use '|| true' to force it past the networking crash
-        run: |
-          cd source
-          mkdir -p out
-          cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
-          
-          # 1. Sync
+          # 2. Sync
           make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           
-          # 2. Force ONLY the Heart file (Bypasses the line 3546 crash)
+          # 3. Targeted Build with Version Magic (+)
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -72,10 +56,9 @@ jobs:
         if: always()
         run: |
           mkdir -p final_output
-          # This specifically hunts for the 'arch/arm64/boot' folder inside 'out'
           find source/out -name "Image.gz-dtb" -exec cp {} final_output/ \;
           ls -R final_output
-          
+
       - name: Upload Finished Kernel
         if: always()
         uses: actions/upload-artifact@v4
