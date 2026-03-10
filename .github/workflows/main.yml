@@ -16,7 +16,7 @@ jobs:
       - name: Install Compatible Legacy Clang
         run: |
           # Use https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 from the 'keys' below
-          git clone --depth=1 CLANG_URL clang-toolchain
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-toolchain
           echo "$(pwd)/clang-toolchain/clang-r383902/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
