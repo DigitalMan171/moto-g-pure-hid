@@ -24,7 +24,7 @@ jobs:
           cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
           # 2. Append your HID modifications from your custom file
-          cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
+          cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config .config
           
           # 3. Apply the "Version Magic" fix to match your 4.19.191+ string
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
