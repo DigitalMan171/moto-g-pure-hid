@@ -11,13 +11,13 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev wget tar git
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git
 
       - name: Install Official Android Clang
         run: |
-          # Pulling the EXACT compiler Motorola uses for Android 12
+          # This is the 100% reliable way to get the Google toolchain
           git clone --depth=1 https://android.googlesource.com clang-toolchain
-          # Adding the compiler to the system path
+          # This registers the compiler so the build script can find 'clang'
           echo "$(pwd)/clang-toolchain/clang-r416183b/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
@@ -39,17 +39,16 @@ jobs:
         run: |
           cd source
           mkdir -p out
-          # Place the blueprint in the build room
           cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
           
-          # Sync the configuration using the Clang toolchain
+          # Sync the configuration using the Clang toolchain we just downloaded
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
           
-          # Start the 20-minute build using the official Android Clang compiler
+          # Start the 20-minute build (using Clang to bypass the 'fs/' error)
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
