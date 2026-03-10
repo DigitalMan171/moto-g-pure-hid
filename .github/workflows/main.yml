@@ -21,19 +21,19 @@ jobs:
       - name: Prepare the Blueprint
         run: |
           # 1. Copy your master config as the new base
-          cp running.config source/arch/arm64/configs/vendor/ellis_defconfig
+          cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
           # 2. Append your HID modifications from your custom file
-          cat ellis_defconfig.config >> source/arch/arm64/configs/vendor/ellis_defconfig
+          cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
           
           # 3. Apply the "Version Magic" fix to match your 4.19.191+ string
-          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/vendor/ellis_defconfig
+          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
 
       - name: Build the Kernel
         run: |
           cd source
           # Prepare the final configuration file
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ellis_defconfig
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ellis_defconfig.config
           # Start the long compilation using all cloud CPU cores
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
 
