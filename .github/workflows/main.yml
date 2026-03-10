@@ -33,7 +33,7 @@ jobs:
         run: |
           cd source
           # Prepare the final configuration file
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ellis_defconfig.config
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ext_config/ellis_defconfig.config
           # Start the long compilation using all cloud CPU cores
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
 
