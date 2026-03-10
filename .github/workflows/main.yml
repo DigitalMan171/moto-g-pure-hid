@@ -28,7 +28,6 @@ jobs:
         run: |
           cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
           cat ellis_defconfig.config >> source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
 
       - name: Build the Kernel
         run: |
@@ -42,6 +41,7 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             KCFLAGS="-w -Wno-error" \
+            KERNELRELEASE="4.19.191+" \
             -j$(nproc) Image.gz-dtb
 
       - name: Upload Finished Kernel
