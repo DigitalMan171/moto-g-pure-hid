@@ -15,8 +15,7 @@ jobs:
 
       - name: Clone Motorola Source
         run: |
-          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source || \
-          git clone --depth=1 --branch android-12-release-s3rhs32.20-42 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
+          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
       - name: Prepare the Blueprint
         run: |
