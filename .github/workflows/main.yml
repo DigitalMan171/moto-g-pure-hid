@@ -35,7 +35,6 @@ jobs:
           CLANG_TRIPLE=aarch64-linux-gnu- \
           CROSS_COMPILE=aarch64-linux-gnu- \
           KCFLAGS="-w -Wno-error -Wno-unused-label" \
-          W=O \
           -j$(nproc) Image.gz-dtb
           
       - name: Upload Finished Kernel
