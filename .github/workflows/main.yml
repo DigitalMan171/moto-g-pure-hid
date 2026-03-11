@@ -1,4 +1,4 @@
-name: Moto G Pure HID Build (Strict & Correct)
+name: Moto G Pure HID Build (Clean & Strict)
 on: [workflow_dispatch]
 
 jobs:
@@ -8,16 +8,16 @@ jobs:
       - name: Checkout Your Configs
         uses: actions/checkout@v4
 
-      - name: Install Build Essentials
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld libelf-dev
+          sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev
 
-      - name: Clone AOSP Legacy Toolchains
+      - name: Clone AOSP Toolchains (The Fix)
         run: |
-          # Clang r353983c is the standard for 4.19.x Android Kernels
+          # Clang r353983c is the stable 'golden' version for 4.19 kernels
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
-          # GCC 4.9 is required for older kernel compatibility and header processing
+          # GCC 4.9 provides the legacy binutils (ld, as) that support the Cortex-A53 errata
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master gcc64
           
           echo "$(pwd)/clang-toolchain/clang-r353983c/bin" >> $GITHUB_PATH
@@ -27,54 +27,46 @@ jobs:
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Configure and Sync
+      - name: Configure Kernel
         run: |
           cd source
           mkdir -p out
           
-          # Merge your HID changes with the base Ellis config
-          # Ensure 'running.config' is in your repo root
+          # Merge your HID changes with the base config
           ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out/ ../ellis_defconfig.config ../running.config
           
-          # Force exactly 4.19.191+ (No git hashes or timestamps)
-          export KBUILD_BUILD_VERSION=1
+          # Force the exact version string 4.19.191+
           echo "+" > .scmversion
           echo "+" > out/.scmversion
           
           make O=out ARCH=arm64 \
             CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-android- \
             CROSS_COMPILE=aarch64-linux-android- \
             olddefconfig
 
-      - name: Build Kernel (Strict)
+      - name: Build Kernel (Strict Mode)
         run: |
           cd source
-          # We keep -w to suppress spam, but we DO NOT bypass int-conversion errors here.
-          # The older toolchain should handle the MediaTek source natively.
+          # We use aarch64-linux-android- to ensure we use the AOSP binutils
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-android- \
             CROSS_COMPILE=aarch64-linux-android- \
             LOCALVERSION="+" \
             Image.gz dtbs
 
-      - name: Verify Kernel String
+      - name: Verify Baked Version
         run: |
           gunzip -c source/out/arch/arm64/boot/Image.gz > kernel_raw
           VER_STR=$(strings kernel_raw | grep "Linux version 4.19.191" | head -n 1)
-          echo "Final Version Check: $VER_STR"
-          
-          # Fail the build if the plus sign is missing
-          if [[ "$VER_STR" != *"+"* ]]; then
-            echo "Error: Kernel version does not contain '+' suffix. Check build logs."
-            exit 1
-          fi
+          echo "Build finished with version: $VER_STR"
+          if [[ "$VER_STR" != *"+"* ]]; then exit 1; fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hid-v4.19.191+
+          name: moto-g-pure-hid-final
           path: |
             source/out/arch/arm64/boot/Image.gz
             source/out/arch/arm64/boot/dts/mediatek/*.dtb
