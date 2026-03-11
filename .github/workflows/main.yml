@@ -23,7 +23,7 @@ jobs:
             clang-aosp
             gcc-64
             gcc-32
-          key: ${{ runner.os }}-toolchains-v4
+          key: ${{ runner.os }}-toolchains-v5
 
       - name: Fetch Toolchains
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -33,17 +33,28 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           find clang-aosp gcc-64 gcc-32 -type f -exec chmod +x {} +
 
+      - name: Export Toolchain Paths
+        run: |
+          # Find the actual bin directories
+          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-r*/bin)
+          GCC64_BIN="$GITHUB_WORKSPACE/gcc-64/bin"
+          GCC32_BIN="$GITHUB_WORKSPACE/gcc-32/bin"
+
+          # Use the official GitHub way to update PATH globally for the job
+          echo "$CLANG_BIN" >> $GITHUB_PATH
+          echo "$GCC64_BIN" >> $GITHUB_PATH
+          echo "$GCC32_BIN" >> $GITHUB_PATH
+          
+          # Output for debugging
+          echo "Added to GITHUB_PATH: $CLANG_BIN"
+
+      - name: Verify Compiler
+        run: |
+          # This will now work because GITHUB_PATH was updated in the previous step
+          aarch64-linux-android-gcc --version
+
       - name: Configure and Build
         run: |
-          # 1. Manual Path Assignment (Eliminates the '::' error from d3339a.jpg)
-          # We use a wildcard to find the clang version folder safely
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-r*)
-          
-          export PATH="$CLANG_DIR/bin:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH"
-          
-          # 2. Verify (This must print the version or the build stops)
-          aarch64-linux-android-gcc --version
-          
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
@@ -52,11 +63,11 @@ jobs:
           mkdir -p out
           cp "$GITHUB_WORKSPACE/running.config" out/.config
 
-          # 3. Build Process
+          # Sync
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Using -j2 to prevent OOM (Out of Memory) kills on the runner
+          # Build
           make -j2 O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
       - name: Upload Kernel
