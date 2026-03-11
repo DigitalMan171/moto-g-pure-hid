@@ -1,4 +1,4 @@
-name: Moto G Pure Ellis - Official Manufacturer Build
+name: Moto G Pure Ellis - Official Build
 on: [workflow_dispatch]
 
 jobs:
@@ -17,50 +17,39 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
-          
-          # Universal permission fix to prevent 'not found' execution blocks
-          find clang-aosp -type f -exec chmod +x {} +
-          find gcc-64 -type f -exec chmod +x {} +
-          find gcc-32 -type f -exec chmod +x {} +
+          find clang-aosp gcc-64 gcc-32 -type f -exec chmod +x {} +
 
-      - name: Compile Official Image
+      - name: Configure and Sync Architecture
         run: |
-          # 1. Establish Absolute Roots
-          ROOT_DIR=$(pwd)
+          # Use absolute workspace root to find files (2 levels up from kernel-source)
+          ROOT_DIR=$GITHUB_WORKSPACE
           CLANG_BIN="$ROOT_DIR/clang-aosp/clang-r416183b/bin"
           GCC64_BIN="$ROOT_DIR/gcc-64/bin"
           GCC32_BIN="$ROOT_DIR/gcc-32/bin"
           
-          # 2. Force PATH injection for the 'gcc-version.sh' check
+          # Fix 'gcc-version.sh' errors by forcing PATH inside this block
           export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
           
-          # 3. Environment Variables for MediaTek Multilib
+          # Setup mandatory manufacturer variables
           export ARCH=arm64
-          export SUBARCH=arm64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           
           cd kernel-source
           mkdir -p out
 
-          # 4. Load Ellis Config (Fixes the failure in e07847.jpg)
-          make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
+          # Copy your config from the workspace root
+          cp "$GITHUB_WORKSPACE/running.config" out/.config
 
-          # 5. Inject HID Support into the official base
-          {
-            echo "CONFIG_USB_CONFIGFS=y"
-            echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_USB_F_HID=y"
-            echo "CONFIG_USB_G_HID=y"
-          } >> out/.config
-          
-          # 6. Final Sync and Compile using LLVM Integrated Assembler
+          # Sync with Ellis base and apply your HID changes
+          make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
+          
+          # Final Build Command
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
-      - name: Upload Verified Kernel
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Moto-G-Pure-Ellis-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb     
