@@ -7,9 +7,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          # This pulls your repo (with running.config) into the main workspace
-          fetch-depth: 1
 
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
@@ -26,43 +23,51 @@ jobs:
             clang-aosp
             gcc-64
             gcc-32
-          key: ${{ runner.os }}-toolchains-v1
+          key: ${{ runner.os }}-toolchains-v2
 
       - name: Fetch Toolchains (Fast Clone)
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
-          # Use single branch and blob filtering for speed
-          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
-          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
-          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           find clang-aosp gcc-64 gcc-32 -type f -exec chmod +x {} +
 
       - name: Configure and Sync Architecture
         run: |
-          # 1. Setup absolute variables
-          export ROOT_DIR=$GITHUB_WORKSPACE
-          export CLANG_BIN=$ROOT_DIR/clang-aosp/clang-r416183b/bin
-          export PATH="$CLANG_BIN:$ROOT_DIR/gcc-64/bin:$ROOT_DIR/gcc-32/bin:$PATH"
+          # 1. Automatically locate the BIN folders using wildcards
+          # This avoids errors if the version numbers (r416183b) change
+          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-*/bin | head -n 1)
+          GCC64_BIN=$GITHUB_WORKSPACE/gcc-64/bin
+          GCC32_BIN=$GITHUB_WORKSPACE/gcc-32/bin
+          
+          # 2. Export absolute PATH
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          
+          # 3. Verify compiler is found BEFORE starting
+          aarch64-linux-android-gcc --version || (echo "COMPILER NOT FOUND IN PATH" && exit 1)
           
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           
-          # 2. Prepare build directory
-          cd $ROOT_DIR/kernel-source
+          cd $GITHUB_WORKSPACE/kernel-source
           mkdir -p out
 
-          # 3. Copy running.config from the root (verified in d50c7a.jpg)
-          if [ -f "$ROOT_DIR/running.config" ]; then
-            cp "$ROOT_DIR/running.config" out/.config
-            echo "SUCCESS: running.config found and copied."
-          else
-            echo "ERROR: running.config not found! Current location:"
-            ls -la $ROOT_DIR
-            exit 1
-          fi
+          # 4. Copy config
+          cp "$GITHUB_WORKSPACE/running.config" out/.config
 
-          # 4. Sync the configuration
-          # Force the use of LLVM and your specific config values
+          # 5. Sync and Build
+          # Running olddefconfig twice ensures all hidden dependencies are satisfied
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
+          
+          # Build with -j2 for stability
+          make -j2 O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
+
+      - name: Upload Kernel Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moto-G-Pure-Ellis-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
