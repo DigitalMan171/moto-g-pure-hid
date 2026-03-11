@@ -1,15 +1,11 @@
-name: Moto G Pure HID Final (Hybrid Fix)
+name: Moto G Pure Ellis - Official Multilib Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Configs
-        uses: actions/checkout@v4
-
-      - name: Install LLVM Tools
-        # We use the full LLVM suite to avoid the /usr/bin/as error
+      - name: Setup Professional Environment
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev clang lld llvm
@@ -18,27 +14,31 @@ jobs:
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Configure Hybrid Build
+      - name: Configure Hybrid Architecture
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Force 64-bit hardware support while keeping 32-bit OS compatibility
+          # 1. Align Architecture: Force 64-bit to handle 'w0' registers
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
+          
+          # 2. Enable 32-bit Compatibility: The "Bridge" for your OS/WiFi
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Inject HID Gadget Support
+          # 3. Inject HID Gadget Requirements
           {
+            echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # olddefconfig handles those touchscreen warnings seen in f1c6bd.jpg
+          # 4. Finalize Config: Use LLVM to avoid the '-EL' host assembler error
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Image.gz-dtb
+      - name: Build Production Image
         run: |
           cd source
-          # LLVM_IAS=1 is the key fix for the '-EL' assembler error
+          # ARCH=arm64 + LLVM=1 is the official way to build MT6765 kernels
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
