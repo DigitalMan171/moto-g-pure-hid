@@ -1,4 +1,4 @@
-name: Moto G Pure 32-bit HID (GCC Native Fix)
+name: Moto G Pure Hybrid HID Build
 on: [workflow_dispatch]
 
 jobs:
@@ -13,24 +13,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev
 
-      - name: Clone AOSP GCC 4.9 Toolchain
+      - name: Clone AOSP Clang & GCC64
         run: |
-          # This is the "official" 32-bit ARM compiler for Android 4.19 kernels
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b master gcc32
-          echo "$(pwd)/gcc32/bin:$PATH" >> $GITHUB_PATH
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master gcc64
+          echo "$(pwd)/clang-toolchain/clang-r353983c/bin:$(pwd)/gcc64/bin:$PATH" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Inject HID to Device Config
+      - name: Configure with ARM64 Support
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Force HID requirements
-          sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' out/.config
+          # Fix the architecture mismatch in the config file itself
+          sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
+          sed -i 's/CONFIG_ARCH_MULTI_V7=y/CONFIG_ARCH_V8A=y/' out/.config
+          
+          # Add HID Gadget Support
           {
             echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
@@ -38,14 +41,15 @@ jobs:
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Use GCC for oldconfig
-          make O=out ARCH=arm CROSS_COMPILE=arm-linux-androideabi- oldconfig < /dev/null
+          # Silent oldconfig to bypass those touchscreen warnings in ef1086.jpg
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CC=clang CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
 
-      - name: Build zImage (Native GCC)
+      - name: Build Image.gz-dtb
         run: |
           cd source
-          # We drop CC=clang and use the native ARM-EABI GCC to avoid the '-EL' error
-          make -j$(nproc) O=out ARCH=arm \
-            CROSS_COMPILE=arm-linux-androideabi- \
-            KCFLAGS="-w" \
-            zImage
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            Image.gz-dtb
