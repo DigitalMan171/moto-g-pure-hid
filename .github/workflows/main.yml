@@ -1,4 +1,4 @@
-name: Moto G Pure 32-bit HID Final
+name: Moto G Pure 32-bit HID Final (Assembler Fix)
 on: [workflow_dispatch]
 
 jobs:
@@ -17,6 +17,7 @@ jobs:
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b master gcc32
+          # Force the GCC bin folder into the PATH so Clang can find 'arm-linux-androideabi-as'
           echo "$(pwd)/clang-toolchain/clang-r353983c/bin:$(pwd)/gcc32/bin:$PATH" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
@@ -27,32 +28,36 @@ jobs:
         run: |
           cd source
           mkdir -p out
-          # Using your provided device config as the foundation
           cp ../running.config out/.config
           
-          # Force enable HID Gadget and Sync keys
+          # Force version sign and HID nodes
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' out/.config
           {
             echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
-            echo "CONFIG_HID=y"
           } >> out/.config
           
-          make O=out ARCH=arm CC=clang CLANG_TRIPLE=arm-linux-androideabi- CROSS_COMPILE=arm-linux-androideabi- oldconfig < /dev/null
+          make O=out ARCH=arm \
+            CC=clang \
+            CLANG_TRIPLE=arm-linux-androideabi- \
+            CROSS_COMPILE=arm-linux-androideabi- \
+            oldconfig < /dev/null
 
       - name: Build zImage
         run: |
           cd source
-          # Changed target to 'zImage' to fix the 'No rule to make target' error
+          # Added CROSS_COMPILE_ARM32 and explicit AS/LD paths to fix the '-EL' error
           make -j$(nproc) O=out ARCH=arm \
             CC=clang \
             CLANG_TRIPLE=arm-linux-androideabi- \
             CROSS_COMPILE=arm-linux-androideabi- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            AS=arm-linux-androideabi-as \
+            LD=arm-linux-androideabi-ld \
             KCFLAGS="-w -target arm-linux-androideabi" \
             zImage
-
       - name: Upload for AIK
         uses: actions/upload-artifact@v4
         with:
