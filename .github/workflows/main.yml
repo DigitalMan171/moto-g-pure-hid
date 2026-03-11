@@ -23,7 +23,7 @@ jobs:
             clang-aosp
             gcc-64
             gcc-32
-          key: ${{ runner.os }}-toolchains-v2
+          key: ${{ runner.os }}-toolchains-v3
 
       - name: Fetch Toolchains (Fast Clone)
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -35,17 +35,18 @@ jobs:
 
       - name: Configure and Sync Architecture
         run: |
-          # 1. Automatically locate the BIN folders using wildcards
-          # This avoids errors if the version numbers (r416183b) change
-          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-*/bin | head -n 1)
-          GCC64_BIN=$GITHUB_WORKSPACE/gcc-64/bin
-          GCC32_BIN=$GITHUB_WORKSPACE/gcc-32/bin
+          # 1. Deep Search for the BIN folders
+          # This looks for the actual folder containing the gcc executable
+          GCC64_PATH=$(find $GITHUB_WORKSPACE/gcc-64 -name "aarch64-linux-android-gcc" -exec dirname {} \; | head -n 1)
+          GCC32_PATH=$(find $GITHUB_WORKSPACE/gcc-32 -name "arm-linux-androideabi-gcc" -exec dirname {} \; | head -n 1)
+          CLANG_PATH=$(find $GITHUB_WORKSPACE/clang-aosp -name "clang" -type f -exec dirname {} \; | grep "bin" | head -n 1)
           
-          # 2. Export absolute PATH
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          # 2. Export and Verify
+          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
+          echo "Full Path: $PATH"
           
-          # 3. Verify compiler is found BEFORE starting
-          aarch64-linux-android-gcc --version || (echo "COMPILER NOT FOUND IN PATH" && exit 1)
+          # Check if the compiler responds
+          aarch64-linux-android-gcc --version || (echo "CRITICAL: Compiler still not found!" && exit 1)
           
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -53,16 +54,13 @@ jobs:
           
           cd $GITHUB_WORKSPACE/kernel-source
           mkdir -p out
-
-          # 4. Copy config
           cp "$GITHUB_WORKSPACE/running.config" out/.config
 
-          # 5. Sync and Build
-          # Running olddefconfig twice ensures all hidden dependencies are satisfied
+          # 3. Sync and Build
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Build with -j2 for stability
+          # Keep -j2 for stability
           make -j2 O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
       - name: Upload Kernel Artifact
