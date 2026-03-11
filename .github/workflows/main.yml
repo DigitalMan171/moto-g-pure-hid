@@ -1,4 +1,4 @@
-name: Moto G Pure 32-bit HID Final (Assembler Fix)
+name: Moto G Pure 32-bit HID Final (Compiler Fix)
 on: [workflow_dispatch]
 
 jobs:
@@ -13,24 +13,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev
 
-      - name: Clone AOSP 32-bit Toolchain
+      - name: Clone AOSP 32-bit Toolchains
         run: |
+          # Clang r353983c
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
+          # GCC 4.9 ARM-EABI for the assembler/linker
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b master gcc32
-          # Force the GCC bin folder into the PATH so Clang can find 'arm-linux-androideabi-as'
+          
+          # Add to PATH
           echo "$(pwd)/clang-toolchain/clang-r353983c/bin:$(pwd)/gcc32/bin:$PATH" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Inject HID to Device Config
+      - name: Prepare Config
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Force version sign and HID nodes
+          # Ensure HID and Versioning
           sed -i 's/CONFIG_LOCALVERSION=""/CONFIG_LOCALVERSION="+"/' out/.config
           {
             echo "CONFIG_USB_CONFIGFS=y"
@@ -48,18 +51,12 @@ jobs:
       - name: Build zImage
         run: |
           cd source
-          # Added CROSS_COMPILE_ARM32 and explicit AS/LD paths to fix the '-EL' error
+          # Added CLANG_PREFIX and CROSS_COMPILE_ARM32 to prevent the '-EL' error
           make -j$(nproc) O=out ARCH=arm \
             CC=clang \
             CLANG_TRIPLE=arm-linux-androideabi- \
             CROSS_COMPILE=arm-linux-androideabi- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            AS=arm-linux-androideabi-as \
-            LD=arm-linux-androideabi-ld \
+            CLANG_PREFIX=arm-linux-androideabi- \
             KCFLAGS="-w -target arm-linux-androideabi" \
             zImage
-      - name: Upload for AIK
-        uses: actions/upload-artifact@v4
-        with:
-          name: moto-g-pure-32bit-kernel
-          path: source/out/arch/arm/boot/zImage
