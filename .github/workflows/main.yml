@@ -1,4 +1,4 @@
-name: Moto G Pure HID Build (Hardened Version)
+name: Moto G Pure HID Build (Final Architecture Fix)
 on: [workflow_dispatch]
 
 jobs:
@@ -15,14 +15,15 @@ jobs:
 
       - name: Clone AOSP Legacy Toolchains
         run: |
-          # Clang r353983c: The exact AOSP version for 4.19 kernels
+          # Clang for the C code
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
-          # GCC 4.9: Provides the legacy linker/assembler for Cortex-A53 fixes
+          # GCC for the Linker/Assembler (Crucial for -EL and x0 fixes)
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master gcc64
+          # Optional but recommended for MTK: 32-bit cross-compiler
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b master gcc32
           
-          # HARD PATH PRIORITY: Puts AOSP tools before system tools
-          echo "$(pwd)/clang-toolchain/clang-r353983c/bin" >> $GITHUB_PATH
-          echo "$(pwd)/gcc64/bin" >> $GITHUB_PATH
+          # Absolute Path Priority
+          echo "$(pwd)/clang-toolchain/clang-r353983c/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
@@ -32,47 +33,48 @@ jobs:
         run: |
           cd source
           mkdir -p out
-          
-          # Merge configs (Ensure running.config is in repo root)
           ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out/ ../ellis_defconfig.config ../running.config
           
-          # FORCE '+' SIGN: Overrides Git's auto-versioning
           echo "+" > .scmversion
           echo "+" > out/.scmversion
-          export KBUILD_BUILD_VERSION=1
           
-          # ARCHITECTURE LOCK: Forces the target triple during config
           make O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-android- \
             CROSS_COMPILE=aarch64-linux-android- \
             olddefconfig
 
-      - name: Build Kernel (Strict Architecture)
+      - name: Build Kernel (Forced Toolchain Path)
         run: |
           cd source
-          # KCFLAGS="-target ...": Fixes the 'unknown register x0' error by forcing the 64-bit target
-          # HOSTCC=clang: Ensures even host-side tools use the same logic
+          # LD=ld.lld and AR=llvm-ar ensure we stay within the LLVM toolchain where possible
+          # CROSS_COMPILE_ARM32 is sometimes needed for MediaTek compatibility checks
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
-            HOSTCC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             CLANG_TRIPLE=aarch64-linux-android- \
             CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             KCFLAGS="-w -target aarch64-linux-android" \
             LOCALVERSION="+" \
             Image.gz dtbs
 
-      - name: Verify Kernel Version
+      - name: Verify Version
         run: |
           gunzip -c source/out/arch/arm64/boot/Image.gz > kernel_raw
           VER_STR=$(strings kernel_raw | grep "Linux version 4.19.191" | head -n 1)
-          echo "FINAL VERSION: $VER_STR"
+          echo "Verified: $VER_STR"
           if [[ "$VER_STR" != *"+"* ]]; then exit 1; fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hid-v4.19.191-plus
+          name: moto-g-pure-hid-v4.19.191-final
           path: |
             source/out/arch/arm64/boot/Image.gz
             source/out/arch/arm64/boot/dts/mediatek/*.dtb
