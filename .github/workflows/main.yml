@@ -1,4 +1,4 @@
-name: Moto G Pure HID Final (No-Sign Fix)
+name: Moto G Pure HID Final (Hybrid Fix)
 on: [workflow_dispatch]
 
 jobs:
@@ -8,7 +8,8 @@ jobs:
       - name: Checkout Configs
         uses: actions/checkout@v4
 
-      - name: Install Tools
+      - name: Install LLVM Tools
+        # We use the full LLVM suite to avoid the /usr/bin/as error
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev clang lld llvm
@@ -17,31 +18,27 @@ jobs:
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Sync & Disable Signing
+      - name: Configure Hybrid Build
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Force 64-bit with 32-bit compat
+          # Force 64-bit hardware support while keeping 32-bit OS compatibility
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Disable Kernel Signing (Fixes the crash in ee230f.jpg)
-          sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/' out/.config
-          sed -i 's/CONFIG_SYSTEM_TRUSTED_KEYRING=y/CONFIG_SYSTEM_TRUSTED_KEYRING=n/' out/.config
-          
-          # Inject HID
+          # Inject HID Gadget Support
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Apply defaults to avoid the manual hangs seen in f1c6bd.jpg
+          # olddefconfig handles those touchscreen warnings seen in f1c6bd.jpg
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Image.gz
+      - name: Build Image.gz-dtb
         run: |
           cd source
-          # Using LLVM_IAS=1 forces the integrated ARM assembler
-          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz
+          # LLVM_IAS=1 is the key fix for the '-EL' assembler error
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
