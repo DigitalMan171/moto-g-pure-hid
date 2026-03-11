@@ -1,4 +1,4 @@
-name: Moto G Pure HID Final (LLVM Hybrid)
+name: Moto G Pure HID Final (No-Sign Fix)
 on: [workflow_dispatch]
 
 jobs:
@@ -17,27 +17,31 @@ jobs:
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Sync 32-bit Config to 64-bit Build
+      - name: Sync & Disable Signing
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Force the kernel to 64-bit while keeping 32-bit app support
+          # Force 64-bit with 32-bit compat
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Inject HID requirements
+          # Disable Kernel Signing (Fixes the crash in ee230f.jpg)
+          sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/' out/.config
+          sed -i 's/CONFIG_SYSTEM_TRUSTED_KEYRING=y/CONFIG_SYSTEM_TRUSTED_KEYRING=n/' out/.config
+          
+          # Inject HID
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # olddefconfig bypasses the 'manual input' hang seen in f1c6bd.jpg
+          # Apply defaults to avoid the manual hangs seen in f1c6bd.jpg
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Image.gz (LLVM Path)
+      - name: Build Image.gz
         run: |
           cd source
-          # Using LLVM=1 ensures the assembler understands 'LSE atomics'
+          # Using LLVM_IAS=1 forces the integrated ARM assembler
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz
