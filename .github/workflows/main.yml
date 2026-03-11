@@ -12,25 +12,36 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Fetch Official AOSP Toolchains
+      - name: Cache Toolchains
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            clang-aosp
+            gcc-64
+            gcc-32
+          key: ${{ runner.os }}-toolchains-v1
+
+      - name: Fetch Toolchains (Fast Clone)
+        if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
+          # Use blob filtering and single branch for maximum speed
+          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
+          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
+          git clone --depth=1 --filter=blob:none --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           find clang-aosp gcc-64 gcc-32 -type f -exec chmod +x {} +
 
       - name: Configure and Sync Architecture
         run: |
-          # Use absolute workspace root to find files (2 levels up from kernel-source)
+          # DEBUG: Print all files so we can find where running.config is hiding
+          echo "--- Current Directory Tree ---"
+          ls -R $GITHUB_WORKSPACE
+          echo "------------------------------"
+
           ROOT_DIR=$GITHUB_WORKSPACE
           CLANG_BIN="$ROOT_DIR/clang-aosp/clang-r416183b/bin"
-          GCC64_BIN="$ROOT_DIR/gcc-64/bin"
-          GCC32_BIN="$ROOT_DIR/gcc-32/bin"
+          export PATH="$CLANG_BIN:$ROOT_DIR/gcc-64/bin:$ROOT_DIR/gcc-32/bin:$PATH"
           
-          # Fix 'gcc-version.sh' errors by forcing PATH inside this block
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
-          
-          # Setup mandatory manufacturer variables
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
@@ -38,18 +49,21 @@ jobs:
           cd kernel-source
           mkdir -p out
 
-          # Copy your config from the workspace root
-          cp "$GITHUB_WORKSPACE/running.config" out/.config
+          # Locate and copy the config - Using a find command to be safe
+          CONFIG_PATH=$(find $GITHUB_WORKSPACE -name "running.config" | head -n 1)
+          if [ -z "$CONFIG_PATH" ]; then
+            echo "ERROR: running.config not found anywhere in workspace!"
+            exit 1
+          fi
+          cp "$CONFIG_PATH" out/.config
 
-          # Sync with Ellis base and apply your HID changes
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Final Build Command
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Moto-G-Pure-Ellis-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb     
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
