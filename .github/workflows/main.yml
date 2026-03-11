@@ -1,4 +1,4 @@
-name: Moto G Pure Ellis - Final Verified Build
+name: Moto G Pure Ellis - Header Space Fix
 on: [workflow_dispatch]
 
 jobs:
@@ -17,36 +17,33 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Install Essential Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev libncurses-dev
-
       - name: Fetch Official AOSP Toolchain
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           
-          # Force execute permissions on EVERYTHING to stop the 'not found' errors
+          # Recursive permission fix
           find clang-aosp -type f -exec chmod +x {} +
           find gcc-64 -type f -exec chmod +x {} +
           find gcc-32 -type f -exec chmod +x {} +
 
-      - name: Compile Official Image
+      - name: Compile With Strict Pathing
         run: |
-          # Use absolute, non-nested variables for maximum shell compatibility
-          export ROOT_DIR=$(pwd)
-          export T=$ROOT_DIR/clang-aosp/clang-r416183b/bin
-          export G64=$ROOT_DIR/gcc-64/bin/aarch64-linux-android-
-          export G32=$ROOT_DIR/gcc-32/bin/arm-linux-androideabi-
+          # Define absolute paths once
+          ROOT_DIR=$(pwd)
+          CLANG_BIN="$ROOT_DIR/clang-aosp/clang-r416183b/bin"
+          GCC64_BIN="$ROOT_DIR/gcc-64/bin"
+          GCC32_BIN="$ROOT_DIR/gcc-32/bin"
           
-          # Move into source
+          # Add to system PATH for sub-scripts
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          
           cd kernel-source
           mkdir -p out
           cp ../config-source/running.config out/.config
           
-          # Standard Moto Configuration
+          # Configuration injection
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           {
@@ -55,14 +52,11 @@ jobs:
             echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
-          
-          # Update PATH once and for all
-          export PATH=$T:$ROOT_DIR/gcc-64/bin:$ROOT_DIR/gcc-32/bin:$PATH
 
-          # Build Config first to ensure syntax is valid
-          make O=out ARCH=arm64 CROSS_COMPILE=$G64 CROSS_COMPILE_ARM32=$G32 LLVM=1 LLVM_IAS=1 olddefconfig
-          
-          # Full Build
+          # Sync the config to ensure headers are generated correctly
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- LLVM=1 LLVM_IAS=1 olddefconfig
+
+          # Build execution with explicit tool mapping
           make -j$(nproc) O=out \
             ARCH=arm64 \
             CC=clang \
@@ -73,12 +67,6 @@ jobs:
             OBJDUMP=llvm-objdump \
             READELF=llvm-readelf \
             STRIP=llvm-strip \
-            CROSS_COMPILE=$G64 \
-            CROSS_COMPILE_ARM32=$G32 \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             LLVM=1 LLVM_IAS=1 Image.gz-dtb
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Moto-G-Pure-HID-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
