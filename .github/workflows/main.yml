@@ -28,22 +28,27 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           
-          # This fixes the 'not found' error from e2c243.jpg
-          chmod -R +x clang-aosp/
-          chmod -R +x gcc-64/
-          chmod -R +x gcc-32/
+          # Force execute permissions on EVERYTHING to stop the 'not found' errors
+          find clang-aosp -type f -exec chmod +x {} +
+          find gcc-64 -type f -exec chmod +x {} +
+          find gcc-32 -type f -exec chmod +x {} +
 
-      - name: Configure Hybrid HID Architecture
+      - name: Compile Official Image
         run: |
+          # Use absolute, non-nested variables for maximum shell compatibility
+          export ROOT_DIR=$(pwd)
+          export T=$ROOT_DIR/clang-aosp/clang-r416183b/bin
+          export G64=$ROOT_DIR/gcc-64/bin/aarch64-linux-android-
+          export G32=$ROOT_DIR/gcc-32/bin/arm-linux-androideabi-
+          
+          # Move into source
           cd kernel-source
           mkdir -p out
           cp ../config-source/running.config out/.config
           
-          # Force 64-bit for hardware support while enabling 32-bit compat
+          # Standard Moto Configuration
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
-          
-          # Inject HID Gadget components (The successful part of e2bef8.jpg)
           {
             echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
@@ -51,31 +56,23 @@ jobs:
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          export T=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
-          export PATH=$T:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
-          
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          # Update PATH once and for all
+          export PATH=$T:$ROOT_DIR/gcc-64/bin:$ROOT_DIR/gcc-32/bin:$PATH
 
-      - name: Final Production Compilation
-        run: |
-          cd kernel-source
+          # Build Config first to ensure syntax is valid
+          make O=out ARCH=arm64 CROSS_COMPILE=$G64 CROSS_COMPILE_ARM32=$G32 LLVM=1 LLVM_IAS=1 olddefconfig
           
-          # Set absolute tool paths to prevent any 'command not found' errors
-          export T=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
-          export G64=$GITHUB_WORKSPACE/gcc-64/bin/aarch64-linux-android-
-          export G32=$GITHUB_WORKSPACE/gcc-32/bin/arm-linux-androideabi-
-          
-          # Use LLVM_IAS=1 to solve the 'w0' register errors from ed9449.jpg
+          # Full Build
           make -j$(nproc) O=out \
             ARCH=arm64 \
-            CC=$T/clang \
-            LD=$T/ld.lld \
-            AR=$T/llvm-ar \
-            NM=$T/llvm-nm \
-            OBJCOPY=$T/llvm-objcopy \
-            OBJDUMP=$T/llvm-objdump \
-            READELF=$T/llvm-readelf \
-            STRIP=$T/llvm-strip \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf \
+            STRIP=llvm-strip \
             CROSS_COMPILE=$G64 \
             CROSS_COMPILE_ARM32=$G32 \
             LLVM=1 LLVM_IAS=1 Image.gz-dtb
