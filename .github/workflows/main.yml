@@ -1,4 +1,4 @@
-name: Moto G Pure HID Build
+name: Moto G Pure HID Build (Strict & Correct)
 on: [workflow_dispatch]
 
 jobs:
@@ -8,82 +8,73 @@ jobs:
       - name: Checkout Your Configs
         uses: actions/checkout@v4
 
-      - name: Install Build Tools
+      - name: Install Build Essentials
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld libelf-dev
 
-      - name: Clone Specific Clang Version (Fast)
+      - name: Clone AOSP Legacy Toolchains
         run: |
-          # Use a shallow clone of the specific branch to avoid a 100GB download
+          # Clang r353983c is the standard for 4.19.x Android Kernels
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
-          # Point exactly to the bin folder for the r383902 version
-          echo "$(pwd)/clang-toolchain/clang-r383902/bin" >> $GITHUB_PATH
+          # GCC 4.9 is required for older kernel compatibility and header processing
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master gcc64
+          
+          echo "$(pwd)/clang-toolchain/clang-r353983c/bin" >> $GITHUB_PATH
+          echo "$(pwd)/gcc64/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
-          # Clone only the specific branch needed for Android 12
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Merge and Sync Configs
+      - name: Configure and Sync
         run: |
           cd source
           mkdir -p out
           
-          # Use the kernel's merge tool to apply HID settings over your running.config
-          # This ensures no duplicate lines and prioritizes HID flags
-          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out/ ../running.config ../ellis_defconfig.config
+          # Merge your HID changes with the base Ellis config
+          # Ensure 'running.config' is in your repo root
+          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out/ ../ellis_defconfig.config ../running.config
           
-          # Force the versioning to match your phone's "+" suffix
-          # This prevents setlocalversion from adding unexpected characters
-          touch .scmversion
-          touch out/.scmversion
+          # Force exactly 4.19.191+ (No git hashes or timestamps)
+          export KBUILD_BUILD_VERSION=1
+          echo "+" > .scmversion
+          echo "+" > out/.scmversion
           
-          # Sync the config to handle dependencies automatically
           make O=out ARCH=arm64 \
-            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
             olddefconfig
 
-      - name: Build Kernel Heart
+      - name: Build Kernel (Strict)
         run: |
           cd source
-          # Disable failing modules that aren't needed for the PoC (speeds up build)
-          sed -i 's/CONFIG_CFG80211=y/CONFIG_CFG80211=n/' out/.config
-          
-          # Build Image.gz and DTBs
-          # We use LOCALVERSION="+" to match your phone's '4.19.191+' exactly
+          # We keep -w to suppress spam, but we DO NOT bypass int-conversion errors here.
+          # The older toolchain should handle the MediaTek source natively.
           make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-w -Wno-error" \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
             LOCALVERSION="+" \
             Image.gz dtbs
 
-      - name: Verify and Stage Output
+      - name: Verify Kernel String
         run: |
-          mkdir -p dist
+          gunzip -c source/out/arch/arm64/boot/Image.gz > kernel_raw
+          VER_STR=$(strings kernel_raw | grep "Linux version 4.19.191" | head -n 1)
+          echo "Final Version Check: $VER_STR"
           
-          # Check for the Kernel
-          if [ -f source/out/arch/arm64/boot/Image.gz ]; then
-            cp source/out/arch/arm64/boot/Image.gz dist/Image.gz-moto-hid
-            echo "Kernel found and staged."
-            
-            # Decompress to check the internal version string
-            gunzip -c dist/Image.gz-moto-hid > kernel_raw
-            VER_STR=$(strings kernel_raw | grep "Linux version 4.19.191" | head -n 1)
-            echo "Baked version: $VER_STR"
-          else
-            echo "ERROR: Image.gz was not created. Check build logs above."
+          # Fail the build if the plus sign is missing
+          if [[ "$VER_STR" != *"+"* ]]; then
+            echo "Error: Kernel version does not contain '+' suffix. Check build logs."
             exit 1
           fi
-          
-          # Check for DTBs
-          find source/out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" -exec cp {} dist/ \;
-          
-          echo "Final contents of dist/ folder:"
-          ls -R dist/
 
-      - name: Upload HID Kernel
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hid-build
-          path: dist/
+          name: moto-g-pure-hid-v4.19.191+
+          path: |
+            source/out/arch/arm64/boot/Image.gz
+            source/out/arch/arm64/boot/dts/mediatek/*.dtb
