@@ -11,58 +11,79 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld
+          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu libssl-dev git clang lld libelf-dev
 
-      - name: Install Compatible Legacy Clang
+      - name: Clone Specific Clang Version (Fast)
         run: |
-          # Use https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 from the 'keys' below
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-toolchain
+          # Use a shallow clone of the specific branch to avoid a 100GB download
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
+          # Point exactly to the bin folder for the r383902 version
           echo "$(pwd)/clang-toolchain/clang-r383902/bin" >> $GITHUB_PATH
 
       - name: Clone Motorola Source
         run: |
-          # Use MOTO_URL from the 'keys' below
+          # Clone only the specific branch needed for Android 12
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Prepare the Blueprint
-        run: |
-          cp running.config source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          # Force HID settings
-          sed -i 's/CONFIG_USB_CONFIGFS=y/CONFIG_USB_CONFIGFS=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
-          sed -i 's/CONFIG_USB_CONFIGFS_F_HID=y/CONFIG_USB_CONFIGFS_F_HID=y/' source/arch/arm64/configs/ext_config/ellis_defconfig.config
-
-      - name: Build the Kernel Heart
+      - name: Merge and Sync Configs
         run: |
           cd source
           mkdir -p out
-          cp arch/arm64/configs/ext_config/ellis_defconfig.config out/.config
           
-          # 1. Disable failing wifi modules to speed up build
+          # Use the kernel's merge tool to apply HID settings over your running.config
+          # This ensures no duplicate lines and prioritizes HID flags
+          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out/ ../running.config ../ellis_defconfig.config
+          
+          # Force the versioning to match your phone's "+" suffix
+          # This prevents setlocalversion from adding unexpected characters
+          touch .scmversion
+          touch out/.scmversion
+          
+          # Sync the config to handle dependencies automatically
+          make O=out ARCH=arm64 \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
+            olddefconfig
+
+      - name: Build Kernel Heart
+        run: |
+          cd source
+          # Disable failing modules that aren't needed for the PoC (speeds up build)
           sed -i 's/CONFIG_CFG80211=y/CONFIG_CFG80211=n/' out/.config
           
-          # 2. Sync
-          make O=out ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          
-          # 3. Targeted Build with Version Magic (+)
-          make O=out ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+          # Build Image.gz and DTBs
+          # We use LOCALVERSION="+" to match your phone's '4.19.191+' exactly
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- \
             KCFLAGS="-w -Wno-error" \
-            KERNELRELEASE="4.19.191+" \
-            -j$(nproc) Image.gz-dtb || true
+            LOCALVERSION="+" \
+            Image.gz dtbs
 
-      - name: Search and Rescue Kernel
-        if: always()
+      - name: Verify and Stage Output
         run: |
-          mkdir -p final_output
-          find source/out -maxdepth 5 -not -path '*/.*'
-          find source/out -name "Image*" -type f -exec cp {} final_output/ \;
-          ls -R final_output
+          mkdir -p dist
+          
+          # Check for the Kernel
+          if [ -f source/out/arch/arm64/boot/Image.gz ]; then
+            cp source/out/arch/arm64/boot/Image.gz dist/Image.gz-moto-hid
+            echo "Kernel found and staged."
+            
+            # Decompress to check the internal version string
+            gunzip -c dist/Image.gz-moto-hid > kernel_raw
+            VER_STR=$(strings kernel_raw | grep "Linux version 4.19.191" | head -n 1)
+            echo "Baked version: $VER_STR"
+          else
+            echo "ERROR: Image.gz was not created. Check build logs above."
+            exit 1
+          fi
+          
+          # Check for DTBs
+          find source/out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" -exec cp {} dist/ \;
+          
+          echo "Final contents of dist/ folder:"
+          ls -R dist/
 
-      - name: Upload Finished Kernel
-        if: always()
+      - name: Upload HID Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: moto-hid-kernel
-          path: final_output/
+          name: moto-g-pure-hid-build
+          path: dist/
