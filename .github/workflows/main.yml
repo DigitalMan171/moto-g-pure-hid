@@ -1,47 +1,87 @@
-name: Moto G Pure Ellis - Hermetic Production Build
+name: Moto G Pure Ellis - Production Multilib Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Workspace
+      - name: Checkout Config Repository
         uses: actions/checkout@v4
         with:
-          path: config-data
+          path: config-source
 
-      - name: Clone Motorola Kernel
+      - name: Checkout Motorola Source
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
+          # Matches your Android 12 build version
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Download Official AOSP Toolchain
+      - name: Install Base Build Dependencies
         run: |
-          # This is the 'secret sauce'—it's the exact compiler used for this phone
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev libncurses-dev
+
+      - name: Fetch Official AOSP Clang Toolchain
+        run: |
+          # Downloading the exact Hermetic toolchain used for MT6765
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
+          # Fetching AOSP GCC for the occasional assembly hand-off
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
 
-      - name: Configure & Compile
+      - name: Configure Architecture & HID
         run: |
           cd kernel-source
           mkdir -p out
-          cp ../config-data/running.config out/.config
           
-          # Force 64-bit for hardware registers while keeping 32-bit compat
+          # Copying your running.config from the isolated config-source folder
+          cp ../config-source/running.config out/.config
+          
+          # Force 64-bit Hardware Support + 32-bit Compatibility
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Set Paths to the Official AOSP tools
-          export PATH=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
+          # Inject HID Gadget Support
+          {
+            echo "CONFIG_USB_CONFIGFS=y"
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_USB_F_HID=y"
+            echo "CONFIG_USB_G_HID=y"
+          } >> out/.config
           
-          # The Proper Command: No host-system tools allowed
+          # Setup Tool Paths
+          export TOOL_PATH=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
+          export PATH=$TOOL_PATH:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
+          
+          # olddefconfig prevents the build from hanging on new options
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+
+      - name: Compile Official Image
+        run: |
+          cd kernel-source
+          
+          # Define absolute paths for ALL tools to prevent 'Error 127' (Command Not Found)
+          export T=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
+          export PATH=$T:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
+          
           make -j$(nproc) O=out \
             ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CC=$T/clang \
+            LD=$T/ld.lld \
+            AR=$T/llvm-ar \
+            NM=$T/llvm-nm \
+            OBJCOPY=$T/llvm-objcopy \
+            OBJDUMP=$T/llvm-objdump \
+            READELF=$T/llvm-readelf \
+            STRIP=$T/llvm-strip \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             LLVM=1 LLVM_IAS=1 Image.gz-dtb
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moto-G-Pure-HID-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
