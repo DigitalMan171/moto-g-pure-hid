@@ -1,17 +1,15 @@
-name: Moto G Pure - Ellis Production Build
+name: Moto G Pure Ellis - Production Multilib Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # Step 1: Get YOUR configuration files first into a dedicated folder
       - name: Checkout Config Repository
         uses: actions/checkout@v4
         with:
-          path: my-config  # This keeps your running.config safe
+          path: my-config  # Isolates your running.config
 
-      # Step 2: Get the MOTOROLA source into its own dedicated folder
       - name: Checkout Motorola Kernel
         uses: actions/checkout@v4
         with:
@@ -19,34 +17,34 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Install Compilers
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev clang lld llvm
 
-      - name: Alignment & Configuration
+      - name: Configure & Sync Architecture
         run: |
           cd kernel-source
           mkdir -p out
           
-          # Use the absolute path to your config file to prevent "cannot stat" errors
+          # Use absolute path to ensure config is found
           cp ../my-config/running.config out/.config
           
-          # Force 64-bit Hardware Support + 32-bit OS Compatibility
+          # BRIDGE: Force 64-bit kernel with 32-bit app support
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Inject HID Gadget Support
+          # HID REQUIREMENTS
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Use LLVM_IAS=1 to stop the '-EL' error seen in 23b768.jpg
+          # Use LLVM_IAS=1 to force the correct internal ARM assembler
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Compile Production Image
+      - name: Compile Official Image
         run: |
           cd kernel-source
-          # Image.gz-dtb is the proper target for MediaTek chips
+          # Image.gz-dtb is the mandatory target for this chipset
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
