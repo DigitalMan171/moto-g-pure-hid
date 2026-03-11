@@ -1,4 +1,4 @@
-name: Moto G Pure Ellis - Hard-Pinned Production Build
+name: Moto G Pure Ellis - Hermetic Production Build
 on: [workflow_dispatch]
 
 jobs:
@@ -8,7 +8,7 @@ jobs:
       - name: Setup Workspace
         uses: actions/checkout@v4
         with:
-          path: config-data  # Separates your running.config from the source
+          path: config-data
 
       - name: Clone Motorola Kernel
         uses: actions/checkout@v4
@@ -17,36 +17,31 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Install Toolchain
+      - name: Download Official AOSP Toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev clang lld llvm-15
+          # This is the 'secret sauce'—it's the exact compiler used for this phone
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
 
-      - name: Configure Hybrid Bridge
+      - name: Configure & Compile
         run: |
           cd kernel-source
           mkdir -p out
-          
-          # Fix the file path issue from eda082.jpg
           cp ../config-data/running.config out/.config
           
-          # Force the kernel to 64-bit to support the Helio G25 registers (w0)
+          # Force 64-bit for hardware registers while keeping 32-bit compat
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
-          
-          # Keep 32-bit compatibility for your OS and WiFi
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Inject HID requirements
-          {
-            echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_USB_G_HID=y"
-          } >> out/.config
+          # Set Paths to the Official AOSP tools
+          export PATH=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
           
-          # Use CC=clang and LLVM=1 to force the correct internal assembler
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-
-      - name: Compile Official Image
-        run: |
-          cd kernel-source
-          # Image.gz-dtb is the mandatory target for this specific chipset
-          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
+          # The Proper Command: No host-system tools allowed
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            LLVM=1 LLVM_IAS=1 Image.gz-dtb
