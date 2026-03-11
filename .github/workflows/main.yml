@@ -1,4 +1,4 @@
-name: Moto G Pure Hybrid HID Build
+name: Moto G Pure HID Final (LLVM Hybrid)
 on: [workflow_dispatch]
 
 jobs:
@@ -8,48 +8,36 @@ jobs:
       - name: Checkout Configs
         uses: actions/checkout@v4
 
-      - name: Install Build Essentials
+      - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev
-
-      - name: Clone AOSP Clang & GCC64
-        run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b master clang-toolchain
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master gcc64
-          echo "$(pwd)/clang-toolchain/clang-r353983c/bin:$(pwd)/gcc64/bin:$PATH" >> $GITHUB_PATH
+          sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev clang lld llvm
 
       - name: Clone Motorola Source
         run: |
           git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
 
-      - name: Configure with ARM64 Support
+      - name: Sync 32-bit Config to 64-bit Build
         run: |
           cd source
           mkdir -p out
           cp ../running.config out/.config
           
-          # Fix the architecture mismatch in the config file itself
+          # Force the kernel to 64-bit while keeping 32-bit app support
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
-          sed -i 's/CONFIG_ARCH_MULTI_V7=y/CONFIG_ARCH_V8A=y/' out/.config
+          echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Add HID Gadget Support
+          # Inject HID requirements
           {
-            echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Silent oldconfig to bypass those touchscreen warnings in ef1086.jpg
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- CC=clang CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
+          # olddefconfig bypasses the 'manual input' hang seen in f1c6bd.jpg
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Image.gz-dtb
+      - name: Build Image.gz (LLVM Path)
         run: |
           cd source
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            Image.gz-dtb
+          # Using LLVM=1 ensures the assembler understands 'LSE atomics'
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz
