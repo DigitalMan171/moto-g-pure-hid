@@ -23,9 +23,9 @@ jobs:
             clang-aosp
             gcc-64
             gcc-32
-          key: ${{ runner.os }}-toolchains-v3
+          key: ${{ runner.os }}-toolchains-v4
 
-      - name: Fetch Toolchains (Fast Clone)
+      - name: Fetch Toolchains
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
@@ -33,20 +33,16 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
           find clang-aosp gcc-64 gcc-32 -type f -exec chmod +x {} +
 
-      - name: Configure and Sync Architecture
+      - name: Configure and Build
         run: |
-          # 1. Deep Search for the BIN folders
-          # This looks for the actual folder containing the gcc executable
-          GCC64_PATH=$(find $GITHUB_WORKSPACE/gcc-64 -name "aarch64-linux-android-gcc" -exec dirname {} \; | head -n 1)
-          GCC32_PATH=$(find $GITHUB_WORKSPACE/gcc-32 -name "arm-linux-androideabi-gcc" -exec dirname {} \; | head -n 1)
-          CLANG_PATH=$(find $GITHUB_WORKSPACE/clang-aosp -name "clang" -type f -exec dirname {} \; | grep "bin" | head -n 1)
+          # 1. Manual Path Assignment (Eliminates the '::' error from d3339a.jpg)
+          # We use a wildcard to find the clang version folder safely
+          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-r*)
           
-          # 2. Export and Verify
-          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
-          echo "Full Path: $PATH"
+          export PATH="$CLANG_DIR/bin:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH"
           
-          # Check if the compiler responds
-          aarch64-linux-android-gcc --version || (echo "CRITICAL: Compiler still not found!" && exit 1)
+          # 2. Verify (This must print the version or the build stops)
+          aarch64-linux-android-gcc --version
           
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -56,16 +52,16 @@ jobs:
           mkdir -p out
           cp "$GITHUB_WORKSPACE/running.config" out/.config
 
-          # 3. Sync and Build
+          # 3. Build Process
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
           
-          # Keep -j2 for stability
+          # Using -j2 to prevent OOM (Out of Memory) kills on the runner
           make -j2 O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
-      - name: Upload Kernel Artifact
+      - name: Upload Kernel
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Moto-G-Pure-Ellis-Kernel
+          name: Moto-G-Pure-Kernel
           path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
