@@ -1,4 +1,4 @@
-name: Moto G Pure Ellis - Production Multilib Build
+name: Moto G Pure Ellis - Final Verified Build
 on: [workflow_dispatch]
 
 jobs:
@@ -14,36 +14,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
-          # Matches your Android 12 build version
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Install Base Build Dependencies
+      - name: Install Essential Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev libncurses-dev
 
-      - name: Fetch Official AOSP Clang Toolchain
+      - name: Fetch Official AOSP Toolchain
         run: |
-          # Downloading the exact Hermetic toolchain used for MT6765
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
-          # Fetching AOSP GCC for the occasional assembly hand-off
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc-64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc-32
+          
+          # This fixes the 'not found' error from e2c243.jpg
+          chmod -R +x clang-aosp/
+          chmod -R +x gcc-64/
+          chmod -R +x gcc-32/
 
-      - name: Configure Architecture & HID
+      - name: Configure Hybrid HID Architecture
         run: |
           cd kernel-source
           mkdir -p out
-          
-          # Copying your running.config from the isolated config-source folder
           cp ../config-source/running.config out/.config
           
-          # Force 64-bit Hardware Support + 32-bit Compatibility
+          # Force 64-bit for hardware support while enabling 32-bit compat
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # Inject HID Gadget Support
+          # Inject HID Gadget components (The successful part of e2bef8.jpg)
           {
             echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
@@ -51,21 +51,21 @@ jobs:
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Setup Tool Paths
-          export TOOL_PATH=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
-          export PATH=$TOOL_PATH:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
-          
-          # olddefconfig prevents the build from hanging on new options
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-
-      - name: Compile Official Image
-        run: |
-          cd kernel-source
-          
-          # Define absolute paths for ALL tools to prevent 'Error 127' (Command Not Found)
           export T=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
           export PATH=$T:$GITHUB_WORKSPACE/gcc-64/bin:$GITHUB_WORKSPACE/gcc-32/bin:$PATH
           
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+
+      - name: Final Production Compilation
+        run: |
+          cd kernel-source
+          
+          # Set absolute tool paths to prevent any 'command not found' errors
+          export T=$GITHUB_WORKSPACE/clang-aosp/clang-r416183b/bin
+          export G64=$GITHUB_WORKSPACE/gcc-64/bin/aarch64-linux-android-
+          export G32=$GITHUB_WORKSPACE/gcc-32/bin/arm-linux-androideabi-
+          
+          # Use LLVM_IAS=1 to solve the 'w0' register errors from ed9449.jpg
           make -j$(nproc) O=out \
             ARCH=arm64 \
             CC=$T/clang \
@@ -76,11 +76,11 @@ jobs:
             OBJDUMP=$T/llvm-objdump \
             READELF=$T/llvm-readelf \
             STRIP=$T/llvm-strip \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CROSS_COMPILE=$G64 \
+            CROSS_COMPILE_ARM32=$G32 \
             LLVM=1 LLVM_IAS=1 Image.gz-dtb
 
-      - name: Upload Build Artifact
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Moto-G-Pure-HID-Kernel
