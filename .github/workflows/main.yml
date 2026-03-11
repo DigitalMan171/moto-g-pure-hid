@@ -1,50 +1,52 @@
-name: Moto G Pure Ellis - Production Multilib Build
+name: Moto G Pure Ellis - Hard-Pinned Production Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Config Repository
+      - name: Setup Workspace
         uses: actions/checkout@v4
         with:
-          path: my-config  # Isolates your running.config
+          path: config-data  # Separates your running.config from the source
 
-      - name: Checkout Motorola Kernel
+      - name: Clone Motorola Kernel
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Install Build Dependencies
+      - name: Install Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev clang lld llvm
+          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev clang lld llvm-15
 
-      - name: Configure & Sync Architecture
+      - name: Configure Hybrid Bridge
         run: |
           cd kernel-source
           mkdir -p out
           
-          # Use absolute path to ensure config is found
-          cp ../my-config/running.config out/.config
+          # Fix the file path issue from eda082.jpg
+          cp ../config-data/running.config out/.config
           
-          # BRIDGE: Force 64-bit kernel with 32-bit app support
+          # Force the kernel to 64-bit to support the Helio G25 registers (w0)
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
+          
+          # Keep 32-bit compatibility for your OS and WiFi
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # HID REQUIREMENTS
+          # Inject HID requirements
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # Use LLVM_IAS=1 to force the correct internal ARM assembler
+          # Use CC=clang and LLVM=1 to force the correct internal assembler
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
       - name: Compile Official Image
         run: |
           cd kernel-source
-          # Image.gz-dtb is the mandatory target for this chipset
+          # Image.gz-dtb is the mandatory target for this specific chipset
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
