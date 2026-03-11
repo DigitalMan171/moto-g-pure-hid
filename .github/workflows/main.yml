@@ -1,44 +1,52 @@
-name: Moto G Pure Ellis - Official Multilib Build
+name: Moto G Pure - Ellis Production Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Professional Environment
+      # Step 1: Get YOUR configuration files first into a dedicated folder
+      - name: Checkout Config Repository
+        uses: actions/checkout@v4
+        with:
+          path: my-config  # This keeps your running.config safe
+
+      # Step 2: Get the MOTOROLA source into its own dedicated folder
+      - name: Checkout Motorola Kernel
+        uses: actions/checkout@v4
+        with:
+          repository: MotorolaMobilityLLC/kernel-mtk
+          ref: android-12-release-s3rhs32.20-42-10-4-11
+          path: kernel-source
+
+      - name: Install Compilers
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex libssl-dev git libelf-dev clang lld llvm
+          sudo apt-get install -y bc bison build-essential flex libssl-dev libelf-dev clang lld llvm
 
-      - name: Clone Motorola Source
+      - name: Alignment & Configuration
         run: |
-          git clone --depth=1 --branch android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git source
-
-      - name: Configure Hybrid Architecture
-        run: |
-          cd source
+          cd kernel-source
           mkdir -p out
-          cp ../running.config out/.config
           
-          # 1. Align Architecture: Force 64-bit to handle 'w0' registers
+          # Use the absolute path to your config file to prevent "cannot stat" errors
+          cp ../my-config/running.config out/.config
+          
+          # Force 64-bit Hardware Support + 32-bit OS Compatibility
           sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
-          
-          # 2. Enable 32-bit Compatibility: The "Bridge" for your OS/WiFi
           echo "CONFIG_COMPAT=y" >> out/.config
           
-          # 3. Inject HID Gadget Requirements
+          # Inject HID Gadget Support
           {
-            echo "CONFIG_USB_CONFIGFS=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_G_HID=y"
           } >> out/.config
           
-          # 4. Finalize Config: Use LLVM to avoid the '-EL' host assembler error
+          # Use LLVM_IAS=1 to stop the '-EL' error seen in 23b768.jpg
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-      - name: Build Production Image
+      - name: Compile Production Image
         run: |
-          cd source
-          # ARCH=arm64 + LLVM=1 is the official way to build MT6765 kernels
+          cd kernel-source
+          # Image.gz-dtb is the proper target for MediaTek chips
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb
