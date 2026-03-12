@@ -32,6 +32,17 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
+          # --- PREEMPTIVE PATCHES ---
+          # 1. Fix 'ksm_flock' inline error (The one you just hit)
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          
+          # 2. Fix 'yylloc' multiple definition error (Common in Ubuntu 22.04+)
+          # This adds 'extern' to the yylloc declaration in the scripts parser
+          sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          
+          # 3. Fix potential 'vLA' (Variable Length Array) warnings as errors
+          # We'll handle this via KCFLAGS below.
+
           # Environment Setup
           export ARCH=arm64
           export SUBARCH=arm64
@@ -54,8 +65,7 @@ jobs:
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # 3. Modern HID Injection (ConfigFS only)
-          # We disable G_HID (legacy) to prevent conflicts with Motorola's USB stack
+          # 3. HID Injection
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -64,9 +74,9 @@ jobs:
           # 4. Sync Config
           make O=out ARCH=arm64 olddefconfig
           
-          # 5. Compile 
-          # Added KCFLAGS to prevent warnings from stopping the build
-          make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb
+          # 5. Compile
+          # KCFLAGS="-Wno-error" is our "safety net" for modern compiler warnings
+          make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j1 Image.gz-dtb
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
