@@ -18,12 +18,9 @@ jobs:
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
       - name: Fetch Kernel Source
-        uses: actions/checkout@v4
-        with:
-          repository: LineageOS/android_kernel_motorola_mt6762
-          token: ${{ secrets.GIT_TOKEN }}
-          path: kernel-source
-          fetch-depth: 1
+        run: |
+          # Bypassing the token entirely to avoid "Not Found" errors on the public repo
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
       - name: Build Kernel
         run: |
@@ -31,23 +28,23 @@ jobs:
           # Pull your specific config from the main-repo folder
           cp ../main-repo/running.config .config
           
-          # 1. PERMISSIVE SECURITY: Bypasses the vibrating reboot loop
+          # 1. PERMISSIVE SECURITY: Essential for testing new HID drivers without reboots
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
           
-          # 2. HID & STABILITY: Core project features
+          # 2. HID & STABILITY: The core features for your custom peripheral
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # 3. COMPILER PATCH & BUILD
+          # 3. COMPILER PATCH & BUILD: Fixing the yylloc error and compiling
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
           
-          # 4. DTB FUSION: Attaches hardware map (ellis.dtb) to the kernel
+          # 4. DTB FUSION: Physically attaching the hardware map to the kernel
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
