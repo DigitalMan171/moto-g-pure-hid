@@ -15,34 +15,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Git Fix and Fetch Source
+      - name: Fetch Kernel Source
         run: |
-          # 1. THE ULTIMATE AUTH FIX: Disable credential helpers that cause the "Username" prompt
-          git config --global credential.helper ""
-          git config --global url."https://github.com/".insteadOf git@github.com:
-          git config --global url."https://".insteadOf git://
-          
-          # 2. Clone using the direct public link
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
+          # We are using the simplest possible clone command.
+          # If this still fails, it means the LineageOS repo is temporarily
+          # rate-limiting the GitHub IP address.
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # Foundation: Use your XT2163-4 running.config
+          # Use your XT2163-4 running.config from the repo
           cp ../running.config .config
           
-          # Features: Inject HID and Stability fixes
+          # Inject the HID and No-Panic settings
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # PREEMPTIVE PATCH (Fixes the flex/bison conflict from your successful run)
+          # Fix the common "yylloc" compiler error
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # Compile using the GCC cross-compiler verified for this runner
+          # Finalize and Build
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
