@@ -1,7 +1,11 @@
-name: Moto G Pure HID + DTB Fusion (Fixed)
+name: Moto G Pure HID + DTB Fusion
 
 on:
   workflow_dispatch:
+
+env:
+  # This clears the Node.js 20 warning
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -12,11 +16,12 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Kernel Source (Bypass Auth Block)
+      - name: Fetch Kernel Source
         run: |
-          # Downloading as ZIP to avoid the 'Username' prompt error
+          # Downloading as ZIP is the only way to avoid the auth blocks on this VM
           wget https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-18.1.zip -O kernel.zip
           unzip -q kernel.zip
+          # This finds whatever folder was unzipped and renames it to kernel-source
           mv android_kernel_motorola_mt6762-* kernel-source
           rm kernel.zip
 
@@ -30,12 +35,12 @@ jobs:
           cd kernel-source
           cp ../main-repo/running.config .config
           
-          # 1. PERMISSIVE SECURITY: Essential to prevent the vibrating reboot loop
+          # 1. PERMISSIVE SECURITY: Fixes the boot loop/vibration issue
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
           
-          # 2. HID & STABILITY: Core project features
+          # 2. HID & STABILITY: Enable your custom controller drivers
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
