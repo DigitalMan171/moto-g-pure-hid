@@ -13,38 +13,41 @@ jobs:
       - name: Install Build Essentials
         run: |
           sudo apt-get update
+          # FIX: Added 'g' to gcc-aarch64-linux-gnu (Previous Error: Unable to locate package)
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel Source
+      - name: Git Fix and Fetch Source
         run: |
-          # Cloning with depth 1 to save time and space
+          # FIX: Force HTTPS to avoid SSH Username prompts (Previous Error: fatal: could not read Username)
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git config --global url."https://".insteadOf git://
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Start with your phone's real working config
-          # We copy it from the repo root into the build folder
+          # 1. Use your specific XT2163-4 running.config as the foundation
           cp ../running.config .config
           
-          # 2. Force-inject the "Xbox Mouse" features and stability fixes
-          # We append these to ensure they override stock 'not set' values
-          echo "CONFIG_USB_G_HID=y" >> .config
-          echo "CONFIG_USB_F_HID=y" >> .config
-          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
+          # 2. FIX: The "Vibrate and Restart" Loop (Kernel Panic)
+          # We force CONFIG_MODVERSIONS=n so the phone accepts our custom build
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. Finalize the configuration
-          # This cleans up the .config file for the compiler
+          # 3. Inject USB HID Mouse/Keyboard Drivers
+          echo "CONFIG_USB_G_HID=y" >> .config
+          echo "CONFIG_USB_F_HID=y" >> .config
+          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
+          
+          # 4. Finalize and verify the .config file
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           
-          # 4. Compile the Image.gz
-          # -j$(nproc) uses all available CPU cores for speed
+          # 5. Compile the Image.gz (Binary Only)
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz
 
       - name: Upload Kernel Artifact
+        # FIX: Updated to v4 (Previous Error: Deprecated v3)
         uses: actions/upload-artifact@v4
         with:
           name: HID-Kernel-Build
