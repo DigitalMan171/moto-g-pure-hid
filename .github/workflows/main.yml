@@ -8,42 +8,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install Build Essentials
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libssl-env libssl-dev cc-aarch64-linux-gnu
+          sudo apt-get install -y bc build-essential bison flex libssl-dev cc-aarch64-linux-gnu
 
       - name: Clone Kernel Source
         run: |
-          # Replace the URL below with your actual kernel source URL if different
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
-          cd kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Start with your phone's actual running configuration
+          # 1. Use the phone's running config as the base
           cp ../running.config .config
           
-          # 2. Inject the HID and No-Panic overrides
-          # We append these to the end so they override any previous stock settings
+          # 2. Force-inject HID and Stability settings
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. Clean and verify the configuration
+          # 3. Process the config (olddefconfig fills in gaps)
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           
-          # 4. Compile the Image.gz
+          # 4. Compile the kernel image
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz
 
       - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: HID-Kernel
+          name: HID-Kernel-Build
           path: kernel-source/arch/arm64/boot/Image.gz
