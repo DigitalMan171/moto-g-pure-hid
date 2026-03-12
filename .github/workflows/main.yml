@@ -13,31 +13,31 @@ jobs:
       - name: Install Build Essentials
         run: |
           sudo apt-get update
-          # FIX: Using 'gcc' instead of 'cc' to match Ubuntu package naming
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Git Fix and Fetch Source
+      - name: Clone Kernel Source
         run: |
-          # THE AUTH FIX: This URL format bypasses the "Username" prompt by using the internal token
-          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
+          # Use the standard public HTTPS link. 
+          # No tokens needed for public LineageOS repos.
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Foundation: Use the XT2163-4 config you uploaded
+          # 1. Foundation: Use your XT2163-4 running.config
           cp ../running.config .config
           
-          # 2. Stability: Prevent the "Vibrate & Restart" panic
+          # 2. Safety: Force 'No-Panic' (Stops the vibration-reboot loop)
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. Features: Force Mouse/HID drivers to 'y'
+          # 3. Features: Inject the HID Mouse drivers
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           
-          # 4. Finalize the config
+          # 4. Process: Using the verified compiler
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           
           # 5. Compile: Build the Image.gz
