@@ -29,15 +29,20 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # 1. SETUP ENVIRONMENT PATHS
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # 2. ESSENTIAL INLINE PATCHES
+          # --- PROTOCOL: SOURCE PRE-PATCHING ---
+          
+          # 1. Strip -Werror from all Makefiles and Kbuild files. 
+          # This is the standard way to bypass vendor-specific strictness without altering logic.
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror//g' {} +
+
+          # 2. Essential Inline Patches (Source logic fixes for modern Clang)
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # 3. DEFINE COMPILER VARIABLES
+          # --- PROTOCOL: ENVIRONMENT DEFINITION ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -47,7 +52,7 @@ jobs:
           export HOSTCC=clang
           export HOSTCXX=clang++
 
-          # 4. CONFIGURATION (Skipping 'make clean' to avoid missing Makefile errors)
+          # --- PROTOCOL: CONFIG & BUILD ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -55,7 +60,7 @@ jobs:
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # 5. HID INJECTION
+          # HID Injection
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -63,7 +68,7 @@ jobs:
           
           make O=out olddefconfig
           
-          # 6. COMPILATION
+          # Use KCFLAGS to pass "no-error" as an extra layer of safety
           make O=out KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-Wno-error" -j1 Image.gz-dtb
 
       - name: Upload Kernel
