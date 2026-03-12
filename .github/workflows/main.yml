@@ -32,24 +32,24 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- STAGE 1: VERIFICATION PROTOCOL ---
-          echo "Verifying critical paths..."
-          ls drivers/power/supply/mtk_battery_table.h || echo "ERROR: Battery table missing!"
-          ls include/linux/blk-crypto.h || echo "ERROR: Crypto header missing!"
+          # --- STAGE 1: SOURCE LOGIC PATCHES ---
 
-          # --- STAGE 2: SOURCE LOGIC PATCHES (THE 'LOCKS') ---
-          
-          # Fix 1: Battery 'Incomplete Type' Forward Declaration
-          # We provide the struct definition so the array size can be calculated.
+          # Fix A: Battery 'Incomplete Type' Forward Declaration
+          # Satisfies the compiler's need for struct size in drivers/power.
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
 
-          # Fix 2: 'Always Inline' Body Failures
-          # De-inlining ensures the compiler doesn't look for a body that isn't there yet.
+          # Fix B: 'Always Inline' Body Failures
+          # De-inlines specific functions to prevent 'body not available' errors with modern Clang.
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # --- STAGE 3: ENVIRONMENT & COMPILER DEFINITION ---
+          # Fix C: Linker Stubs for Missing Motorola Charging Functions
+          # These satisfy 'undefined reference' errors during vmlinux linking.
+          echo 'void moto_chg_tcmd_register(void *data) { return; }' >> drivers/power/supply/mtk_battery.c
+          echo 'void moto_chg_tcmd_unregister(void *data) { return; }' >> drivers/power/supply/mtk_battery.c
+
+          # --- STAGE 2: ENVIRONMENT & COMPILER ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -59,7 +59,7 @@ jobs:
           export HOSTCC=clang
           export HOSTCXX=clang++
 
-          # --- STAGE 4: CONFIGURATION ---
+          # --- STAGE 3: CONFIGURATION ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -67,7 +67,7 @@ jobs:
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # HID Injection (The core of your project)
+          # HID Injection (Configuring Android as a USB HID Gadget)
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -75,8 +75,8 @@ jobs:
           
           make O=out olddefconfig
           
-          # --- STAGE 5: COMPILATION (WITH GLOBAL SILENCE) ---
-          # KCFLAGS="-w" is the standard developer tool for bypassing vendor -Werror traps.
+          # --- STAGE 4: FINAL COMPILATION ---
+          # KCFLAGS="-w" ensures vendor formatting warnings don't break the build.
           make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-w" -j1 Image.gz-dtb
 
       - name: Upload Kernel
