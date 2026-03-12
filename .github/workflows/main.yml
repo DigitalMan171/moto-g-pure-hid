@@ -1,4 +1,4 @@
-name: Moto G Pure Ellis - Official Build
+name: Moto G Pure - Manufacturer Spec Build
 on: [workflow_dispatch]
 
 jobs:
@@ -15,45 +15,51 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Fetch Toolchains
+      - name: Fetch Official Toolchains (Branch Targeted)
         run: |
-          # Use depth 1 to save time and space
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
+          # We are targeting the 'master' branch explicitly but disabling filters 
+          # to ensure we get the actual binaries, not just metadata.
+          git clone --depth=1 --single-branch https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
+          git clone --depth=1 --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
 
-      - name: Verify Toolchain Locations
+      - name: Deep File Discovery
+        id: locate
         run: |
-          # This step identifies exactly where the binaries are before we try to use them
-          echo "Checking GCC64..."
-          ls -d $GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-gcc || exit 1
-          echo "Checking GCC32..."
-          ls -d $GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-gcc || exit 1
-          echo "Checking Clang..."
-          ls -d $GITHUB_WORKSPACE/clang-aosp/clang-r*/bin/clang || exit 1
+          # This is the "Truth" step. We search the entire workspace for the binaries.
+          # If they exist ANYWHERE on the runner, we will find them.
+          GCC64_BIN=$(find $GITHUB_WORKSPACE/gcc64 -name "aarch64-linux-android-gcc" -type f | head -n 1)
+          GCC32_BIN=$(find $GITHUB_WORKSPACE/gcc32 -name "arm-linux-androideabi-gcc" -type f | head -n 1)
+          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang-aosp -name "clang" -type f | grep "bin/clang" | head -n 1)
+
+          if [ -z "$GCC64_BIN" ]; then
+            echo "FAILED: GCC64 not found. Printing directory structure for help:"
+            ls -R $GITHUB_WORKSPACE/gcc64
+            exit 1
+          fi
+
+          # Save the directories (not the files) to the environment
+          echo "GCC64_PATH=$(dirname $GCC64_BIN)" >> $GITHUB_ENV
+          echo "GCC32_PATH=$(dirname $GCC32_BIN)" >> $GITHUB_ENV
+          echo "CLANG_PATH=$(dirname $CLANG_BIN)" >> $GITHUB_ENV
 
       - name: Build Kernel
         run: |
-          # Dynamically grab the exact Clang folder name (e.g., clang-r416183b)
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/clang-aosp/clang-r*)
-          
-          # Set up absolute paths to avoid any "command not found" issues
-          export PATH="$CLANG_DIR/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
+          # Use the exact paths found in the Discovery step
+          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # One final check to confirm the shell 'sees' the compiler
-          aarch64-linux-android-gcc --version
-
           cd kernel-source
           mkdir -p out
-          
-          # Copy your config from the repo root
-          cp "$GITHUB_WORKSPACE/running.config" out/.config
+          cp $GITHUB_WORKSPACE/running.config out/.config
 
-          # Build Sequence
+          # Ensure your HID project drivers are set
+          scripts/config --file out/.config --enable CONFIG_USB_G_HID
+          scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
 
