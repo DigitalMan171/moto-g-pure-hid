@@ -15,32 +15,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel Source
+      - name: Fetch Kernel Source
         run: |
-          # Use the standard public HTTPS link. 
-          # No tokens needed for public LineageOS repos.
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
+          # Reverting to the exact public URL that worked without auth errors
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Foundation: Use your XT2163-4 running.config
+          # Use your uploaded running.config as the base
           cp ../running.config .config
           
-          # 2. Safety: Force 'No-Panic' (Stops the vibration-reboot loop)
-          echo "CONFIG_MODVERSIONS=n" >> .config
-          echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
-          
-          # 3. Features: Inject the HID Mouse drivers
+          # Re-applying the surgical injections for HID and No-Panic
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
+          echo "CONFIG_MODVERSIONS=n" >> .config
+          echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 4. Process: Using the verified compiler
+          # The successful compiler prefix and config sync
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          
-          # 5. Compile: Build the Image.gz
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz
 
       - name: Upload Kernel Artifact
