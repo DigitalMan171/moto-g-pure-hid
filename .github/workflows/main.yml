@@ -13,30 +13,35 @@ jobs:
       - name: Install Build Essentials
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libssl-dev cc-aarch64-linux-gnu
+          sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
       - name: Clone Kernel Source
         run: |
+          # Cloning with depth 1 to save time and space
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Use the phone's running config as the base
+          # 1. Start with your phone's real working config
+          # We copy it from the repo root into the build folder
           cp ../running.config .config
           
-          # 2. Force-inject HID and Stability settings
+          # 2. Force-inject the "Xbox Mouse" features and stability fixes
+          # We append these to ensure they override stock 'not set' values
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. Process the config (olddefconfig fills in gaps)
+          # 3. Finalize the configuration
+          # This cleans up the .config file for the compiler
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           
-          # 4. Compile the kernel image
+          # 4. Compile the Image.gz
+          # -j$(nproc) uses all available CPU cores for speed
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz
 
       - name: Upload Kernel Artifact
