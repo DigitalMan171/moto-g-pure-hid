@@ -32,13 +32,13 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- PROTOCOL: SOURCE PRE-PATCHING ---
+          # --- PROTOCOL: AGGRESSIVE SOURCE PRE-PATCHING ---
           
-          # 1. Strip -Werror from all Makefiles and Kbuild files. 
-          # This is the standard way to bypass vendor-specific strictness without altering logic.
-          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror//g' {} +
+          # 1. Strip ALL variations of -Werror. 
+          # This catches -Werror, -Werror=attributes, -Werror=misleading-indentation, etc.
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror[^ ]*//g' {} +
 
-          # 2. Essential Inline Patches (Source logic fixes for modern Clang)
+          # 2. Essential Inline Patches
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
@@ -68,8 +68,8 @@ jobs:
           
           make O=out olddefconfig
           
-          # Use KCFLAGS to pass "no-error" as an extra layer of safety
-          make O=out KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-Wno-error" -j1 Image.gz-dtb
+          # Final Compile
+          make O=out KCFLAGS="-Wno-error -Wno-misleading-indentation" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-Wno-error -Wno-misleading-indentation" -j1 Image.gz-dtb
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
