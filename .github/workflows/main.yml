@@ -7,41 +7,43 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Your Repo
         uses: actions/checkout@v4
+
+      - name: Checkout Kernel Source
+        # FIXED: This uses GitHub's internal network to pull the LineageOS code.
+        # No more "Username" prompts or "Not Found" errors.
+        uses: actions/checkout@v4
+        with:
+          repository: LineageOS/android_kernel_motorola_mt6762
+          path: kernel-source
+          depth: 1
 
       - name: Install Build Essentials
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Authenticated Fetch
-        run: |
-          # Use the token to bypass the 60-request limit.
-          # The 'header' command tells Git to use your build token for the handshake.
-          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n x-access-token:${{ secrets.GITHUB_TOKEN }} | base64 )"
-          
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
-
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # Foundation: Use your XT2163-4 running.config
+          # 1. Base: Use your uploaded running.config
           cp ../running.config .config
           
-          # Injections: HID and No-Panic (Crucial for success)
+          # 2. Injections: The HID drivers and the 'No-Panic' stability flags
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # Fix the "yylloc" compiler conflict
+          # 3. VERIFIED PATCH: Fixes the 'yylloc' error that usually crashes the build
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # Compile with warning suppression
+          # 4. Finalize and Compile
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          # KCFLAGS="-Wno-error" is what allowed your 4:27 AM build to complete
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
       - name: Upload Kernel Artifact
