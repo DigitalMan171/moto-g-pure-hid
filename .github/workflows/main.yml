@@ -1,4 +1,4 @@
-name: Moto G Pure HID Build
+name: Moto G Pure HID + DTB Fusion
 
 on:
   workflow_dispatch:
@@ -17,37 +17,39 @@ jobs:
 
       - name: Fetch Kernel Source
         run: |
-          # The Correct Way: Clear the "noise" from previous attempts
+          # THE RESET: Wipes any Git "Username" or "Token" hangovers
           git config --global --unset-all url."https://github.com/".insteadOf || true
           git config --global --unset-all http.https://github.com/.extraheader || true
           git config --global credential.helper ""
           
-          # Direct clone of the public repo
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
-          
-          # Base Config
           cp ../running.config .config
           
-          # Stability & HID Injections
+          # 1. PERMISSIVE SECURITY: Bypasses the vibrating reboot loop
+          echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
+          echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
+          echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
+          
+          # 2. HID & STABILITY: Core project features
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
-          echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # The verified compiler patch for mt6762
+          # 3. COMPILER PATCH & BUILD
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
-          
-          # Compile with warning suppression
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
+          
+          # 4. DTB FUSION: Attaches the hardware map (ellis.dtb) to the kernel brain
+          cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HID-Kernel-Build
-          path: kernel-source/arch/arm64/boot/Image.gz
+          name: HID-Kernel-Combined
+          path: kernel-source/arch/arm64/boot/Image.gz-dtb
