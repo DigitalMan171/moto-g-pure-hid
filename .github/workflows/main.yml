@@ -28,7 +28,7 @@ jobs:
       - name: Build Kernel
         run: |
           cd kernel-source
-          # Pull the config from your main repo folder
+          # Pull your specific config from the main-repo folder
           cp ../main-repo/running.config .config
           
           # 1. PERMISSIVE SECURITY: Bypasses the vibrating reboot loop
@@ -47,7 +47,7 @@ jobs:
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
           
-          # 4. DTB FUSION: Attaches the hardware map (ellis.dtb) to the kernel brain
+          # 4. DTB FUSION: Attaches hardware map (ellis.dtb) to the kernel
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
