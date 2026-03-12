@@ -32,16 +32,18 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- COMPILER & VENDOR PATCHES ---
-          # 1. Global Inline Fixes
+          # --- COMPILER & SYNTAX PATCHES ---
+          # 1. Fix flag syntax for modern GCC
+          find . -type f -name "Makefile*" -o -name "Kbuild*" | xargs sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g'
+          
+          # 2. Global Inline Fixes
           find include/ -name "*.h" -exec sed -i 's/inline void ksm_flock/void ksm_flock/g' {} +
           find kernel/sched/ -name "*.h" -exec sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' {} +
           
-          # 2. Fix 'yylloc' multiple definition
-          sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          # 3. Fix 'yylloc' multiple definition (Updated to be silent if file is missing)
+          find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' {} + || true
 
-          # 3. FORCE REMOVE -Werror from all Makefiles
-          # This allows the build to bypass the "btcvsd.o" error you encountered.
+          # 4. FORCE REMOVE -Werror from all Makefiles
           find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g'
 
           # Environment Setup
