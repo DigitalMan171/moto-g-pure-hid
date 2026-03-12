@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Your Repository
         uses: actions/checkout@v4
 
       - name: Install Build Essentials
@@ -17,33 +17,33 @@ jobs:
 
       - name: Fetch Kernel Source
         run: |
-          # THE FIX: Resetting the protocol so it stops asking for a Username
+          # The Correct Way: Clear any previous environment "noise" 
+          # then run a standard clone.
           git config --global --unset-all url."https://github.com/".insteadOf || true
-          git config --global --unset-all url."git@github.com:".insteadOf || true
+          git config --global --unset-all http.https://github.com/.extraheader || true
           
-          # The exact address we used for the successful build
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Base: Use your uploaded running.config
+          # 1. Base Configuration
           cp ../running.config .config
           
-          # 2. Injections: The specific HID and No-Panic lines
+          # 2. Required Injections (HID and No-Panic stability)
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. THE PATCH: This is the exact fix that allowed the 4:27 AM build to finish
+          # 3. Critical Fix: Solves the 'yylloc' compiler conflict 
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 4. Compile: Using verified compiler and warning suppression
+          # 4. Finalize and Compile
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          # Using KCFLAGS="-Wno-error" is the key that allowed successful completion
+          # KCFLAGS="-Wno-error" is mandatory for building older kernels on modern GCC
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
       - name: Upload Kernel Artifact
