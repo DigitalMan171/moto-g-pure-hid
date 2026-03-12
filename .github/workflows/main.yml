@@ -1,10 +1,7 @@
-name: Moto Build V3 Bulletproof
+name: Moto G Pure HID + DTB Fusion (Fixed)
 
 on:
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -15,45 +12,44 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Kernel Source (ZIP Method)
+      - name: Fetch Kernel Source (Bypass Auth Block)
         run: |
-          # Bypassing Git entirely to avoid authentication 'Username' errors
-          wget https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-19.1.zip -O kernel.zip
+          # Downloading as ZIP to avoid the 'Username' prompt error
+          wget https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-18.1.zip -O kernel.zip
           unzip -q kernel.zip
-          # Note: The folder name inside the zip depends on the branch name
-          mv android_kernel_motorola_mt6762-lineage-19.1 kernel-source
+          mv android_kernel_motorola_mt6762-* kernel-source
           rm kernel.zip
 
-      - name: Download & Setup Manual Toolchain
+      - name: Install Build Essentials
         run: |
-          wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
-          tar -xvf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
-          mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu toolchain
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
       - name: Build Kernel
         run: |
           cd kernel-source
-          export TOOLCHAIN_PATH=$(pwd)/../toolchain/bin/aarch64-none-linux-gnu-
           cp ../main-repo/running.config .config
           
-          # Injections
+          # 1. PERMISSIVE SECURITY: Essential to prevent the vibrating reboot loop
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
+          
+          # 2. HID & STABILITY: Core project features
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # Compile
+          # 3. COMPILER PATCH & BUILD
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
-          make ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH olddefconfig
-          make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH KCFLAGS="-Wno-error" Image.gz
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
           
-          # DTB Fusion (ellis)
+          # 4. DTB FUSION: The physical hardware mapping for 'ellis'
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
-      - name: Upload Artifact
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HID-Kernel-Combined
