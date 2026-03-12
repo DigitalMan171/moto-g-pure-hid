@@ -23,31 +23,38 @@ jobs:
             bin64
             bin32
             clang-flat
-          key: ${{ runner.os }}-toolchains-v3
+          # Incremented to v5 to ensure we start with a clean, verified state
+          key: ${{ runner.os }}-toolchains-v5
 
       - name: Fetch and Flatten Toolchains
         if: steps.cache-toolchains.outputs.cache-hit != 'true'
         run: |
-          # 1. Clone into temporary areas
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-tmp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64-tmp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32-tmp
 
           mkdir -p bin64 bin32 clang-flat
 
-          # 2. Search for the actual binary locations and copy their parent folders
-          # This handles the nesting issue (e.g., gcc64-tmp/aarch64-linux-android-4.9/bin)
-          GCC64_PATH=$(find gcc64-tmp -name "aarch64-linux-android-gcc" -type f | xargs dirname)
-          GCC32_PATH=$(find gcc32-tmp -name "arm-linux-androideabi-gcc" -type f | xargs dirname)
-          CLANG_PATH=$(find clang-tmp -name "clang" -type f | grep "bin/clang" | head -n 1 | xargs dirname)
+          # Locate and copy the actual bin folders to solve the 'cannot stat' error
+          cp -r $(find gcc64-tmp -name "bin" -type d | head -n 1)/. bin64/
+          cp -r $(find gcc32-tmp -name "bin" -type d | head -n 1)/. bin32/
+          
+          # Clang requires the full directory structure for internal libraries
+          CLANG_BIN_DIR=$(find clang-tmp -name "bin" -type d | grep "clang-r" | head -n 1)
+          cp -r $(dirname $CLANG_BIN_DIR)/. clang-flat/
 
-          cp -r $GCC64_PATH/. bin64/
-          cp -r $GCC32_PATH/. bin32/
-          cp -r $CLANG_PATH/.. clang-flat/
+          # Kill-switch: Ensure directories are not empty before caching
+          if [ -z "$(ls -A bin64)" ]; then echo "Error: bin64 is empty!" && exit 1; fi
 
-          # 3. Cleanup and Permissions
           rm -rf clang-tmp gcc64-tmp gcc32-tmp
           chmod +x bin64/* bin32/* clang-flat/bin/*
+
+      - name: Verify Config for HID Support
+        run: |
+          # These are the critical flags for your Android-as-USB-Mouse project
+          echo "Checking running.config for HID Gadget drivers..."
+          grep -E "CONFIG_USB_G_HID|CONFIG_USB_CONFIGFS_F_HID|CONFIG_HID_GENERIC" "$GITHUB_WORKSPACE/running.config" || \
+          (echo "WARNING: HID Gadget drivers might be missing from your config!" && exit 1)
 
       - name: Build Kernel
         run: |
@@ -58,7 +65,7 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
           # Verification Check
-          aarch64-linux-android-gcc --version || (ls -R $GITHUB_WORKSPACE && exit 1)
+          aarch64-linux-android-gcc --version || (echo "Compiler not found in PATH" && exit 1)
 
           cd kernel-source
           mkdir -p out
@@ -66,3 +73,10 @@ jobs:
 
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
+
+      - name: Upload Kernel Artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moto-G-Pure-Ellis-HID-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
