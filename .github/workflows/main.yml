@@ -17,33 +17,33 @@ jobs:
 
       - name: Fetch Kernel Source
         run: |
-          # The Correct Way: Clear any previous environment "noise" 
-          # then run a standard clone.
+          # The Correct Way: Clear the "noise" from previous attempts
           git config --global --unset-all url."https://github.com/".insteadOf || true
           git config --global --unset-all http.https://github.com/.extraheader || true
+          git config --global credential.helper ""
           
+          # Direct clone of the public repo
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Base Configuration
+          # Base Config
           cp ../running.config .config
           
-          # 2. Required Injections (HID and No-Panic stability)
+          # Stability & HID Injections
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. Critical Fix: Solves the 'yylloc' compiler conflict 
+          # The verified compiler patch for mt6762
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 4. Finalize and Compile
+          # Compile with warning suppression
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          # KCFLAGS="-Wno-error" is mandatory for building older kernels on modern GCC
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
       - name: Upload Kernel Artifact
