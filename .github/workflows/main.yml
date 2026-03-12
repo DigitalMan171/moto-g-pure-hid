@@ -1,4 +1,4 @@
-name: Moto G Pure Manual Toolchain Build
+name: Moto G Pure Hard Reset Build
 
 on:
   workflow_dispatch:
@@ -12,25 +12,32 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Kernel Source
+      - name: Hard Reset Environment & Fetch Source
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
+          # 1. Purge all remnant Git configurations
+          git config --global --unset-all url."https://github.com/".insteadOf || true
+          git config --global --unset-all http.https://github.com/.extraheader || true
+          git config --global credential.helper ""
+          
+          # 2. Force environment to ignore all authentication prompts
+          export GIT_TERMINAL_PROMPT=0
+          
+          # 3. Anonymous clone using a 'null' config to override any lingering secrets
+          git -c "http.extraheader=" clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
       - name: Download & Setup Manual Toolchain
         run: |
-          # Downloading the specific GCC 10.3 toolchain
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xvf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu toolchain
 
       - name: Build Kernel
         run: |
-          # 1. Setup paths
           cd kernel-source
           export TOOLCHAIN_PATH=$(pwd)/../toolchain/bin/aarch64-none-linux-gnu-
           cp ../main-repo/running.config .config
           
-          # 2. Inject HID & Permissive flags
+          # 1. Inject HID and Permissive flags
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
@@ -39,16 +46,16 @@ jobs:
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # 3. Patch & Compile using the manual toolchain
+          # 2. Patch and Compile
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           make ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH KCFLAGS="-Wno-error" Image.gz
           
-          # 4. Final Fusion
+          # 3. DTB Fusion (ellis)
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HID-Kernel-Manual-Build
+          name: HID-Kernel-Combined
           path: kernel-source/arch/arm64/boot/Image.gz-dtb
