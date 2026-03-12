@@ -47,8 +47,8 @@ jobs:
           export HOSTCC=clang
           export HOSTCXX=clang++
 
-          # 4. CONFIGURATION
-          make O=out clean
+          # 4. CONFIGURATION (Skipping 'make clean' to avoid missing Makefile errors)
+          mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
           if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
