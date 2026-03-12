@@ -32,9 +32,11 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- SOURCE LOGIC PATCHES ONLY ---
-          # These fix actual code conflicts, not formatting warnings.
+          # --- ESSENTIAL SOURCE PATCHES ---
+          # 1. Fix 'always_inline' failures across crypto, keyslot, and scheduler
+          # We add blk-crypto.h to the list of fixed files.
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
           # --- ENVIRONMENT ---
@@ -63,8 +65,8 @@ jobs:
           
           make O=out olddefconfig
           
-          # --- THE FIX ---
-          # Using -w silences all warnings, which bypasses -Werror without touching Makefiles.
+          # --- COMPILATION ---
+          # Using -w to bypass the warning-traps in vendor sub-directories
           make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-w" -j1 Image.gz-dtb
 
       - name: Upload Kernel
