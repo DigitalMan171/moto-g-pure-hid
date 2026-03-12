@@ -17,34 +17,33 @@ jobs:
 
       - name: Git Fix and Fetch Source
         run: |
-          # This is the EXACT fix we used when it worked:
-          # It forces the runner to ignore SSH and use standard HTTPS without asking for credentials
+          # 1. THE ULTIMATE AUTH FIX: Disable credential helpers that cause the "Username" prompt
+          git config --global credential.helper ""
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
           
-          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762 kernel-source
+          # 2. Clone using the direct public link
+          git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Start with your phone's real config
+          # Foundation: Use your XT2163-4 running.config
           cp ../running.config .config
           
-          # 2. HID and No-Panic Injections
+          # Features: Inject HID and Stability fixes
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. PREEMPTIVE PATCHES (The fixes that allowed the build to finish at 4:27 AM)
-          # Fixing common MTK 'yylloc' and 'ksm_flock' errors
+          # PREEMPTIVE PATCH (Fixes the flex/bison conflict from your successful run)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 4. Finalize and Compile
+          # Compile using the GCC cross-compiler verified for this runner
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          # We use -Wno-error to prevent warnings from stopping the build on newer GCC versions
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
       - name: Upload Kernel Artifact
