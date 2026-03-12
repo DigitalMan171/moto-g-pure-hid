@@ -32,19 +32,16 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- REFINED SYNTAX PATCHES ---
-          # 1. Targeted Fix: Only add -W where it is specifically missing for implicit declarations
-          # This avoids mangling other flags like =return-type
-          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/ -implicit-function-declaration/ -Wimplicit-function-declaration/g' {} +
-
-          # 2. Global Inline Fixes
-          find include/ -name "*.h" -exec sed -i 's/inline void ksm_flock/void ksm_flock/g' {} +
-          find kernel/sched/ -name "*.h" -exec sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' {} +
+          # --- ESSENTIAL FIXES ONLY ---
           
-          # 3. Fix 'yylloc' multiple definition
-          find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' {} + || true
+          # 1. Fix flag syntax for modern GCC (Required for scripts/ folder)
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' {} +
 
-          # 4. FORCE REMOVE -Werror (Broad cleanup)
+          # 2. Fix 'always_inline' failures (Required for blk-crypto and scheduler)
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
+
+          # 3. Strip -Werror from vendor directories (Required for Bluetooth/Sound drivers)
           find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g'
 
           # Environment Setup
@@ -61,24 +58,21 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 1. Base Config
+          # 1. Config Setup
           make O=out k65v1_64_bsp_defconfig
-          
-          # 2. Hardware Fragment Merge
           if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # 3. HID Injection
+          # 2. Enable HID
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # 4. Sync Config
           make O=out ARCH=arm64 olddefconfig
           
-          # 5. Compile
+          # 3. Compile
           make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j1 Image.gz-dtb
 
       - name: Upload Kernel
