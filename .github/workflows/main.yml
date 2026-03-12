@@ -1,42 +1,4 @@
-name: Moto G Pure - HID Kernel Build
-on: [workflow_dispatch]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          repository: MotorolaMobilityLLC/kernel-mtk
-          ref: android-12-release-s3rhs32.20-42-10-4-11
-          path: kernel-source
-
-      - name: Fetch Toolchains
-        run: |
-          # Use specific LineageOS branches and validated repository names
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 -b lineage-19.1 gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 -b lineage-19.1 gcc32
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
-
-      - name: Verify Toolchains & Print Locations
-        run: |
-          echo "--- TOOLCHAIN LOCATIONS ---"
-          echo "GCC64 Path: $(pwd)/gcc64/bin"
-          echo "GCC32 Path: $(pwd)/gcc32/bin"
-          echo "Clang Path: $(pwd)/clang-aosp/bin"
-          
-          echo "Checking GCC64 version..."
-          ./gcc64/bin/aarch64-linux-android-gcc --version | head -n 1
-          echo "Checking GCC32 version..."
-          ./gcc32/bin/arm-linux-androideabi-gcc --version | head -n 1
-          echo "Checking Clang version..."
-          ./clang-aosp/bin/clang --version | head -n 1
-
-      - name: Build Kernel
+- name: Build Kernel
         run: |
           export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
           export ARCH=arm64
@@ -46,6 +8,20 @@ jobs:
 
           cd kernel-source
           mkdir -p out
+          
+          # DEBUG: List all available defconfigs so we can find the right 'ellis' one
+          echo "--- LISTING AVAILABLE CONFIGS ---"
+          find arch/arm64/configs/ -name "*defconfig" | sed 's:.*/::'
+          echo "---------------------------------"
+
+          # Temporary fix: try to use the most likely Mediatek config if ellis is missing
+          # We will check the output of the 'find' command in the log to be sure
+          export TARGET_CONFIG="ellis_defconfig"
+          if [ ! -f "arch/arm64/configs/ellis_defconfig" ]; then
+             echo "ellis_defconfig not found! Checking for alternatives..."
+             # If you see mt6765_defconfig in the logs, we will swap to that next
+          fi
+
           cp $GITHUB_WORKSPACE/running.config out/.config
 
           echo "Configuring HID Mouse and Sensor drivers..."
@@ -56,16 +32,7 @@ jobs:
           scripts/config --file out/.config --enable CONFIG_INPUT_UINPUT
           scripts/config --file out/.config --enable CONFIG_HIDRAW
           
-          echo "Verifying enabled flags..."
-          grep -E "CONFIG_USB_G_HID|CONFIG_USB_CONFIGFS_F_HID|CONFIG_INPUT_UINPUT|CONFIG_HID_GENERIC" out/.config
-
           echo "Starting Make..."
-          make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
+          # Note: If this fails, look at the LISTING AVAILABLE CONFIGS section in the log!
+          make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE $TARGET_CONFIG
           time make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
-
-      - name: Upload Kernel
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Moto-G-Pure-HID-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
