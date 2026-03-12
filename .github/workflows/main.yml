@@ -1,4 +1,4 @@
-name: Moto G Pure (MTK) HID Build
+name: Moto G Pure (MTK) HID Final Build
 run-name: HID Kernel Build - ${{ github.ref_name }}
 
 on:
@@ -32,24 +32,23 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- STAGE 1: SOURCE LOGIC PATCHES ---
+          # --- SOURCE LOGIC PATCHES ---
 
-          # Fix A: Battery 'Incomplete Type' Forward Declaration
-          # Satisfies the compiler's need for struct size in drivers/power.
+          # 1. Forward declare the temperature struct to solve "incomplete type"
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
 
-          # Fix B: 'Always Inline' Body Failures
-          # De-inlines specific functions to prevent 'body not available' errors with modern Clang.
+          # 2. De-inline functions to prevent 'always_inline' failures
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # Fix C: Linker Stubs for Missing Motorola Charging Functions
-          # These satisfy 'undefined reference' errors during vmlinux linking.
-          echo 'void moto_chg_tcmd_register(void *data) { return; }' >> drivers/power/supply/mtk_battery.c
-          echo 'void moto_chg_tcmd_unregister(void *data) { return; }' >> drivers/power/supply/mtk_battery.c
+          # 3. Type-Matched Linker Stubs (The Final Lock)
+          # These match the exact 'int' return type and struct pointer in the Moto headers.
+          echo 'struct moto_chg_tcmd_client;' >> drivers/power/supply/mtk_battery.c
+          echo 'int moto_chg_tcmd_register(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
+          echo 'int moto_chg_tcmd_unregister(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
 
-          # --- STAGE 2: ENVIRONMENT & COMPILER ---
+          # --- COMPILER SETUP ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -57,9 +56,8 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CC=clang
           export HOSTCC=clang
-          export HOSTCXX=clang++
 
-          # --- STAGE 3: CONFIGURATION ---
+          # --- CONFIG & HID INJECTION ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -67,17 +65,11 @@ jobs:
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # HID Injection (Configuring Android as a USB HID Gadget)
-          ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
-          ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
-          ./scripts/config --file out/.config --enable CONFIG_USB_HID
-          
+          ./scripts/config --file out/.config --disable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_HID_GENERIC --enable CONFIG_USB_HID
           make O=out olddefconfig
           
-          # --- STAGE 4: FINAL COMPILATION ---
-          # KCFLAGS="-w" ensures vendor formatting warnings don't break the build.
-          make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-w" -j1 Image.gz-dtb
+          # --- FINAL BUILD ---
+          make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
