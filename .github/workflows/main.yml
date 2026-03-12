@@ -15,23 +15,27 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Git Fix and Fetch Toolchains
+      - name: Fetch Toolchains
         run: |
-          git config --global url."https://github.com/".insteadOf git@github.com:
-          git config --global url."https://".insteadOf git://
-          
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-4691093 clang-aosp
+          # Using the persistent token to bypass the "Username" prompt
+          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 https://x-access-token:${TF_VAR_token:-${{ secrets.GITHUB_TOKEN }}}@github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-4691093 clang-aosp
 
-      - name: Verify Toolchains
+      - name: Verify Toolchains & Print Locations
         run: |
-          echo "Checking GCC64..."
-          gcc64/bin/aarch64-linux-android-gcc --version | head -n 1
-          echo "Checking GCC32..."
-          gcc32/bin/arm-linux-androideabi-gcc --version | head -n 1
-          echo "Checking Clang..."
-          clang-aosp/bin/clang --version | head -n 1
+          echo "--- TOOLCHAIN LOCATIONS ---"
+          echo "GCC64 Path: $(pwd)/gcc64/bin"
+          echo "GCC32 Path: $(pwd)/gcc32/bin"
+          echo "Clang Path: $(pwd)/clang-aosp/bin"
+          echo "---------------------------"
+          
+          echo "Checking GCC64 version..."
+          ./gcc64/bin/aarch64-linux-android-gcc --version | head -n 1
+          echo "Checking GCC32 version..."
+          ./gcc32/bin/arm-linux-androideabi-gcc --version | head -n 1
+          echo "Checking Clang version..."
+          ./clang-aosp/bin/clang --version | head -n 1
 
       - name: Build Kernel
         run: |
