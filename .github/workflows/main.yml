@@ -16,27 +16,22 @@ jobs:
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
           
-          # We use Clang 11 to match your 'proc/version' screenshot
+          # Cloning Toolchains
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Checkout MTK Kernel Source
         run: |
-          # The branch from your build ID in the correct MTK repo
+          # Using the specific branch from your Build ID
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
-
-      - name: List Available Configs
-        run: |
-          cd kernel-source
-          find arch/arm64/configs -name "*defconfig*"
 
       - name: Build Kernel
         run: |
           export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           cd kernel-source
           
-          # Even with 32-bit build, the kernel itself is compiled as arm64
+          # Environment variables for MTK 64-bit kernel
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -44,19 +39,35 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 'houston' is the internal name for Moto G Pure
-          make O=out vendor/houston_defconfig
+          echo "--- Searching for correct defconfig ---"
+          # This looks for 'houston', 'mt6765', or 'mt6762' in the configs folder
+          CONF_PATH=$(find arch/arm64/configs -name "*houston*defconfig" -o -name "*mt6765*defconfig" -o -name "*mt6762*defconfig" | head -n 1)
           
-          # Inject HID drivers for USB Mouse/Keyboard support
+          if [ -z "$CONF_PATH" ]; then
+            echo "❌ ERROR: No matching defconfig found. Listing all available configs for manual check:"
+            find arch/arm64/configs -name "*defconfig*"
+            exit 1
+          fi
+
+          # Extract just the name relative to the configs folder
+          # e.g., 'vendor/houston_defconfig' or 'mt6765_64_bsp_defconfig'
+          CONF_NAME=${CONF_PATH#arch/arm64/configs/}
+          echo "✅ Selected Config: $CONF_NAME"
+
+          # 1. Initialize Configuration
+          make O=out $CONF_NAME
+          
+          # 2. Enable HID Gadget drivers for Mouse/Keyboard functionality
           ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
+          # 3. Compile the Kernel
           make O=out -j$(nproc)
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
           name: Moto-G-Pure-HID-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz
+          path: kernel-source/out/arch/
