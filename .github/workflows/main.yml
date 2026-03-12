@@ -16,28 +16,22 @@ jobs:
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
           
-          # Clone Toolchains
+          # Clone necessary compilers for 4.19 kernel
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Checkout MTK Kernel Source
         run: |
-          # Cloning the exact branch based on your 'proc/version' screenshot
+          # Cloning the specific branch for your Build ID: S3RHS32.20-42-10-4-11
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
-
-      - name: Sleuth - List Available Configs
-        run: |
-          cd kernel-source
-          echo "--- ALL DEFCONFIGS IN REPO ---"
-          find arch/arm64/configs -name "*defconfig*" || echo "No configs in arch/arm64/configs"
-          echo "----------------------------"
 
       - name: Build Kernel
         run: |
           export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           cd kernel-source
           
+          # Setup Environment
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -45,33 +39,23 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 1. FIND THE CONFIG
-          # We check for 'houston', then 'mt6765', then 'mt6762'
-          CONF_PATH=$(find arch/arm64/configs -name "*houston*defconfig" -o -name "*mt6765*defconfig" -o -name "*mt6762*defconfig" | head -n 1)
+          # 1. Initialize with the G25/Houston base config
+          make O=out k65v1_64_bsp_defconfig
           
-          if [ -z "$CONF_PATH" ]; then
-            echo "❌ ERROR: No matching defconfig found. Manual check required from Sleuth logs above."
-            exit 1
+          # 2. Merge the 'Ellis' hardware fragment for hardware compatibility
+          if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
+            echo "Merging Ellis hardware fragment..."
+            ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # Strip path to get the name for 'make'
-          CONF_NAME=${CONF_PATH#arch/arm64/configs/}
-          echo "✅ Using Config: $CONF_NAME"
-
-          # 2. CONFIGURE
-          make O=out $CONF_NAME
-          
-          # 3. ENABLE HID DRIVERS (Crucial for Xbox Mouse/KB support)
+          # 3. Enable HID Gadget drivers for Mouse/Keyboard functionality
           ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # 4. COMPILE
-          make O=out -j$(nproc)
+          # 4. Final Compile (Image.gz-dtb includes the Device Tree for booting)
+          make O=out -j$(nproc) Image.gz-dtb
 
       - name: Upload Kernel
-        uses: actions/upload-artifact@v4
-        with:
-          name: Moto-G-Pure-HID-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz
+        uses: actions/upload-artifact
