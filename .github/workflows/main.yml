@@ -15,7 +15,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi pahole dtc
+          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi pahole device-tree-compiler
 
       - name: Fetch Clang Toolchain
         run: |
@@ -33,11 +33,11 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # 2. ESSENTIAL INLINE PATCHES (Necessary for modern Clang compatibility)
+          # 2. ESSENTIAL INLINE PATCHES
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # 3. DEFINE COMPILER VARIABLES (The 'Protocol' way)
+          # 3. DEFINE COMPILER VARIABLES
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -48,7 +48,6 @@ jobs:
           export HOSTCXX=clang++
 
           # 4. CONFIGURATION
-          # Clean the output directory first
           make O=out clean
           make O=out k65v1_64_bsp_defconfig
           
@@ -65,7 +64,6 @@ jobs:
           make O=out olddefconfig
           
           # 6. COMPILATION
-          # We use LLVM=1 if the kernel supports it, otherwise standard CC=clang
           make O=out KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-Wno-error" -j1 Image.gz-dtb
 
       - name: Upload Kernel
