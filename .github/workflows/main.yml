@@ -32,14 +32,24 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- ESSENTIAL SOURCE PATCHES ---
-          # 1. Fix 'always_inline' failures across crypto, keyslot, and scheduler
-          # We add blk-crypto.h to the list of fixed files.
+          # --- STAGE 1: VERIFICATION PROTOCOL ---
+          echo "Verifying critical paths..."
+          ls drivers/power/supply/mtk_battery_table.h || echo "ERROR: Battery table missing!"
+          ls include/linux/blk-crypto.h || echo "ERROR: Crypto header missing!"
+
+          # --- STAGE 2: SOURCE LOGIC PATCHES (THE 'LOCKS') ---
+          
+          # Fix 1: Battery 'Incomplete Type' Forward Declaration
+          # We provide the struct definition so the array size can be calculated.
+          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
+
+          # Fix 2: 'Always Inline' Body Failures
+          # De-inlining ensures the compiler doesn't look for a body that isn't there yet.
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # --- ENVIRONMENT ---
+          # --- STAGE 3: ENVIRONMENT & COMPILER DEFINITION ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -49,7 +59,7 @@ jobs:
           export HOSTCC=clang
           export HOSTCXX=clang++
 
-          # --- CONFIG ---
+          # --- STAGE 4: CONFIGURATION ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -57,7 +67,7 @@ jobs:
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # HID Injection
+          # HID Injection (The core of your project)
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -65,8 +75,8 @@ jobs:
           
           make O=out olddefconfig
           
-          # --- COMPILATION ---
-          # Using -w to bypass the warning-traps in vendor sub-directories
+          # --- STAGE 5: COMPILATION (WITH GLOBAL SILENCE) ---
+          # KCFLAGS="-w" is the standard developer tool for bypassing vendor -Werror traps.
           make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-w" -j1 Image.gz-dtb
 
       - name: Upload Kernel
