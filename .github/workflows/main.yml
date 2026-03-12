@@ -15,16 +15,13 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev
+          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: Fetch Toolchains (Updated to GCC 9.3)
+      - name: Fetch Clang Toolchain
         run: |
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
-          
-          # Using GCC 9.3 to satisfy the kernel's version check
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-9.3 -b lineage-18.1 gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+          # Using the specific Clang version for Android 12 kernels
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Checkout MTK Kernel Source
@@ -33,8 +30,7 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # Add toolchains to PATH
-          export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
+          export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
           # Environment Setup
@@ -45,30 +41,30 @@ jobs:
           export LOCALVERSION=""
           touch .scmversion
 
-          # Toolchain Prefixes (Note the change to -gnu- for GCC 9.3)
+          # Toolchain Prefixes (Using system-wide GCC and AOSP Clang)
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 1. Base Config
+          # 1. Initialize with the G25/MT6765 base config
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. Hardware Fragment Merge (Ellis/Houston)
+          # 2. Merge hardware-specific fragments
           if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # 3. HID Injection
+          # 3. Inject HID Gadget drivers
           ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # 4. Sync Config (This fixes the "Error in reading" prompt hang)
+          # 4. Process new configurations (Bypasses interactive prompts)
           make O=out ARCH=arm64 olddefconfig
           
-          # 5. Compile
+          # 5. Compile the kernel and device tree
           make O=out ARCH=arm64 -j$(nproc) Image.gz-dtb
 
       - name: Upload Kernel
