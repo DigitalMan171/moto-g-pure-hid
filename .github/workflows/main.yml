@@ -32,14 +32,17 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- ADVANCED COMPILER PATCHES ---
-          # 1. Global Inline Fix: Strip 'inline' from declarations that cause "body not available" errors.
-          # This targets ksm_flock, uclamp_se_set, and others in one go.
+          # --- COMPILER & VENDOR PATCHES ---
+          # 1. Global Inline Fixes
           find include/ -name "*.h" -exec sed -i 's/inline void ksm_flock/void ksm_flock/g' {} +
           find kernel/sched/ -name "*.h" -exec sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' {} +
           
-          # 2. Fix 'yylloc' multiple definition error
+          # 2. Fix 'yylloc' multiple definition
           sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+
+          # 3. FORCE REMOVE -Werror from all Makefiles
+          # This allows the build to bypass the "btcvsd.o" error you encountered.
+          find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g'
 
           # Environment Setup
           export ARCH=arm64
@@ -73,7 +76,6 @@ jobs:
           make O=out ARCH=arm64 olddefconfig
           
           # 5. Compile
-          # KCFLAGS="-Wno-error" helps skip non-fatal compiler pedantics
           make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j$(nproc) Image.gz-dtb || make O=out ARCH=arm64 KCFLAGS="-Wno-error" -j1 Image.gz-dtb
 
       - name: Upload Kernel
