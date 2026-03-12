@@ -23,32 +23,31 @@ jobs:
             bin64
             bin32
             clang-flat
-          key: ${{ runner.os }}-toolchains-v1
+          key: ${{ runner.os }}-toolchains-v3
 
-      - name: Fetch and Hard-Link Toolchains
+      - name: Fetch and Flatten Toolchains
         if: steps.cache-toolchains.outputs.cache-hit != 'true'
         run: |
-          # Only runs if cache is NOT found
+          # 1. Clone into temporary areas
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-tmp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64-tmp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32-tmp
 
-          mkdir -p $GITHUB_WORKSPACE/bin64
-          mkdir -p $GITHUB_WORKSPACE/bin32
-          mkdir -p $GITHUB_WORKSPACE/clang-flat
+          mkdir -p bin64 bin32 clang-flat
 
-          cp -r gcc64-tmp/bin/. $GITHUB_WORKSPACE/bin64/
-          cp -r gcc32-tmp/bin/. $GITHUB_WORKSPACE/bin32/
-          cp -r clang-tmp/clang-r*/. $GITHUB_WORKSPACE/clang-flat/
+          # 2. Search for the actual binary locations and copy their parent folders
+          # This handles the nesting issue (e.g., gcc64-tmp/aarch64-linux-android-4.9/bin)
+          GCC64_PATH=$(find gcc64-tmp -name "aarch64-linux-android-gcc" -type f | xargs dirname)
+          GCC32_PATH=$(find gcc32-tmp -name "arm-linux-androideabi-gcc" -type f | xargs dirname)
+          CLANG_PATH=$(find clang-tmp -name "clang" -type f | grep "bin/clang" | head -n 1 | xargs dirname)
 
+          cp -r $GCC64_PATH/. bin64/
+          cp -r $GCC32_PATH/. bin32/
+          cp -r $CLANG_PATH/.. clang-flat/
+
+          # 3. Cleanup and Permissions
           rm -rf clang-tmp gcc64-tmp gcc32-tmp
-          chmod +x $GITHUB_WORKSPACE/bin64/* $GITHUB_WORKSPACE/bin32/* $GITHUB_WORKSPACE/clang-flat/bin/*
-
-      - name: Pre-Flight Verification
-        run: |
-          # Ensures binaries exist and are executable whether from cache or fresh download
-          ls $GITHUB_WORKSPACE/bin64/aarch64-linux-android-gcc || exit 1
-          ls $GITHUB_WORKSPACE/bin32/arm-linux-androideabi-gcc || exit 1
+          chmod +x bin64/* bin32/* clang-flat/bin/*
 
       - name: Build Kernel
         run: |
@@ -58,16 +57,12 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          cd $GITHUB_WORKSPACE/kernel-source
+          # Verification Check
+          aarch64-linux-android-gcc --version || (ls -R $GITHUB_WORKSPACE && exit 1)
+
+          cd kernel-source
           mkdir -p out
           cp "$GITHUB_WORKSPACE/running.config" out/.config
 
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
           make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
-
-      - name: Upload Kernel Artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Moto-G-Pure-Ellis-Kernel
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
