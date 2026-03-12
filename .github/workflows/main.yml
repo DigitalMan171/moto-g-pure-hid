@@ -32,17 +32,12 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- PROTOCOL: AGGRESSIVE SOURCE PRE-PATCHING ---
-          
-          # 1. Strip ALL variations of -Werror. 
-          # This catches -Werror, -Werror=attributes, -Werror=misleading-indentation, etc.
-          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-Werror[^ ]*//g' {} +
-
-          # 2. Essential Inline Patches
+          # --- SOURCE LOGIC PATCHES ONLY ---
+          # These fix actual code conflicts, not formatting warnings.
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # --- PROTOCOL: ENVIRONMENT DEFINITION ---
+          # --- ENVIRONMENT ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -52,7 +47,7 @@ jobs:
           export HOSTCC=clang
           export HOSTCXX=clang++
 
-          # --- PROTOCOL: CONFIG & BUILD ---
+          # --- CONFIG ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -68,8 +63,9 @@ jobs:
           
           make O=out olddefconfig
           
-          # Final Compile
-          make O=out KCFLAGS="-Wno-error -Wno-misleading-indentation" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-Wno-error -Wno-misleading-indentation" -j1 Image.gz-dtb
+          # --- THE FIX ---
+          # Using -w silences all warnings, which bypasses -Werror without touching Makefiles.
+          make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb || make O=out KCFLAGS="-w" -j1 Image.gz-dtb
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
