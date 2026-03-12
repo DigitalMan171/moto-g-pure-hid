@@ -1,4 +1,4 @@
-name: Moto G Pure HID Build
+name: Moto G Pure (MTK) HID Build
 
 on:
   workflow_dispatch:
@@ -16,23 +16,22 @@ jobs:
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
           
+          # We use Clang 11 to match your 'proc/version' screenshot
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: Checkout Kernel Source
+      - name: Checkout MTK Kernel Source
         run: |
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
+          # The branch from your build ID in the correct MTK repo
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
       - name: Build Kernel
         run: |
-          export CLANG_PATH=$(pwd)/clang-aosp/bin
-          export GCC64_PATH=$(pwd)/gcc64/bin
-          export GCC32_PATH=$(pwd)/gcc32/bin
-          export PATH=$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH
-          
+          export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           cd kernel-source
           
+          # Even with 32-bit build, the kernel itself is compiled as arm64
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -40,8 +39,10 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
+          # 'houston' is the internal name for Moto G Pure
           make O=out vendor/houston_defconfig
           
+          # Inject HID drivers for USB Mouse/Keyboard support
           ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -52,5 +53,5 @@ jobs:
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Image.gz-dtb
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
+          name: Moto-G-Pure-HID-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz
