@@ -1,4 +1,5 @@
 name: Moto G Pure (MTK) HID Build
+run-name: HID Kernel Build - ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -11,19 +12,24 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex
+
       - name: Git Fix and Fetch Toolchains
         run: |
           git config --global url."https://github.com/".insteadOf git@github.com:
           git config --global url."https://".insteadOf git://
           
-          # Clone necessary compilers for 4.19 kernel
+          # Clones necessary compilers for the 4.19 MTK kernel
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Checkout MTK Kernel Source
         run: |
-          # Cloning the specific branch for your Build ID: S3RHS32.20-42-10-4-11
+          # Targeting the specific Motorola branch for your Build ID
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
       - name: Build Kernel
@@ -31,7 +37,13 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           cd kernel-source
           
-          # Setup Environment
+          # Variables to ensure a clean version string (no + or -dirty)
+          export KBUILD_BUILD_USER=build
+          export KBUILD_BUILD_HOST=build
+          touch .scmversion
+          export LOCALVERSION=""
+
+          # Environment Setup
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
@@ -39,23 +51,26 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 1. Initialize with the G25/Houston base config
+          # 1. Initialize with the identified G25/MT6765 base config
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. Merge the 'Ellis' hardware fragment for hardware compatibility
+          # 2. Merge hardware fragment (The 'Ellis' tweak we found earlier)
           if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
-            echo "Merging Ellis hardware fragment..."
+            echo "Merging hardware-specific fragments..."
             ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           fi
 
-          # 3. Enable HID Gadget drivers for Mouse/Keyboard functionality
+          # 3. Inject HID Gadget drivers
           ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # 4. Final Compile (Image.gz-dtb includes the Device Tree for booting)
+          # 4. Compile the kernel and device tree
           make O=out -j$(nproc) Image.gz-dtb
 
       - name: Upload Kernel
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moto-G-Pure-HID-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
