@@ -32,23 +32,23 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- SOURCE LOGIC PATCHES ---
-
+          # --- STAGE 1: SOURCE LOGIC PATCHES ---
+          
           # 1. Forward declare the temperature struct to solve "incomplete type"
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
 
-          # 2. De-inline functions to prevent 'always_inline' failures
+          # 2. De-inline functions to prevent 'always_inline' failures in modern Clang
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # 3. Type-Matched Linker Stubs (The Final Lock)
-          # These match the exact 'int' return type and struct pointer in the Moto headers.
+          # 3. Type-Matched Linker Stubs
+          # These satisfy the 'undefined reference' errors for missing Motorola code.
           echo 'struct moto_chg_tcmd_client;' >> drivers/power/supply/mtk_battery.c
           echo 'int moto_chg_tcmd_register(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
           echo 'int moto_chg_tcmd_unregister(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
 
-          # --- COMPILER SETUP ---
+          # --- STAGE 2: COMPILER ENVIRONMENT ---
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -57,7 +57,7 @@ jobs:
           export CC=clang
           export HOSTCC=clang
 
-          # --- CONFIG & HID INJECTION ---
+          # --- STAGE 3: CONFIG & HID INJECTION ---
           mkdir -p out
           make O=out k65v1_64_bsp_defconfig
           
@@ -68,8 +68,18 @@ jobs:
           ./scripts/config --file out/.config --disable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_HID_GENERIC --enable CONFIG_USB_HID
           make O=out olddefconfig
           
-          # --- FINAL BUILD ---
-          make O=out KCFLAGS="-w" -j$(nproc) Image.gz-dtb
+          # --- STAGE 4: COMPILATION & PACKAGING ---
+          # Build compressed image and device tree blobs separately
+          make O=out KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+          
+          # Manual concatenation to create the combined Image.gz-dtb
+          # We search for the specific MT6765 DTB for the Moto G Pure (Ellis)
+          DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
+          if [ -z "$DTB_FILE" ]; then
+            DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" | head -n 1)
+          fi
+          
+          cat out/arch/arm64/boot/Image.gz "$DTB_FILE" > out/arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
