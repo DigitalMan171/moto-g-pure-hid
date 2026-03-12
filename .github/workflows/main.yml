@@ -32,16 +32,17 @@ jobs:
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
           
-          # --- ESSENTIAL FIXES ONLY ---
+          # --- PRECISION FIXES ONLY ---
           
-          # 1. Fix flag syntax for modern GCC (Required for scripts/ folder)
-          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' {} +
+          # 1. Fix flag syntax for modern GCC (Uses \b for exact word boundary matching)
+          # This prevents mangling adjacent flags like =return-type
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" \) -exec sed -i 's/\b-implicit-function-declaration\b/-Wimplicit-function-declaration/g' {} +
 
-          # 2. Fix 'always_inline' failures (Required for blk-crypto and scheduler)
+          # 2. Fix 'always_inline' failures
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # 3. Strip -Werror from vendor directories (Required for Bluetooth/Sound drivers)
+          # 3. Strip -Werror from all Makefiles
           find . -name "Makefile" -o -name "Kbuild" | xargs sed -i 's/-Werror//g'
 
           # Environment Setup
