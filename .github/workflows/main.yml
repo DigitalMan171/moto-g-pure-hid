@@ -15,34 +15,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Fetch Kernel Source
+      - name: Authenticated Fetch
         run: |
-          # RESET: Remove any redirects that were causing "Username" or "Not Found" errors
-          git config --global --unset-all url."https://github.com/".insteadOf || true
+          # Use the token to bypass the 60-request limit.
+          # The 'header' command tells Git to use your build token for the handshake.
+          git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $(echo -n x-access-token:${{ secrets.GITHUB_TOKEN }} | base64 )"
           
-          # Use the verified public URL
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
       - name: Build Kernel
         run: |
           cd kernel-source
           
-          # 1. Base: Use your uploaded running.config
+          # Foundation: Use your XT2163-4 running.config
           cp ../running.config .config
           
-          # 2. Injections: HID drivers and No-Panic flags
+          # Injections: HID and No-Panic (Crucial for success)
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> .config
           
-          # 3. PREEMPTIVE PATCH: This fixed the 4:27 AM build crash
+          # Fix the "yylloc" compiler conflict
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           
-          # 4. Finalize and Compile
+          # Compile with warning suppression
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          # Using KCFLAGS="-Wno-error" is what got us to the finish line before
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
 
       - name: Upload Kernel Artifact
