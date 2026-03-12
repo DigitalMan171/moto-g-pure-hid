@@ -1,4 +1,4 @@
-name: Moto G Pure - Manufacturer Spec Build (V2)
+name: Moto G Pure - HID Kernel Build
 on: [workflow_dispatch]
 
 jobs:
@@ -15,41 +15,24 @@ jobs:
           ref: android-12-release-s3rhs32.20-42-10-4-11
           path: kernel-source
 
-      - name: Fetch Official Toolchains (Full Data)
+      - name: Fetch Toolchains
         run: |
-          # We are removing '--single-branch' and depth to ensure we don't get a hollow copy
-          # We target the specific 'master' branch which SHOULD contain the binaries
-          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-aosp
-          git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
-          git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-4691093 clang-aosp
 
-      - name: Deep File Discovery
-        id: locate
+      - name: Verify Toolchains
         run: |
-          # Now that we have the full history, let's find the files
-          GCC64_BIN=$(find $GITHUB_WORKSPACE/gcc64 -name "aarch64-linux-android-gcc" -type f | head -n 1)
-          GCC32_BIN=$(find $GITHUB_WORKSPACE/gcc32 -name "arm-linux-androideabi-gcc" -type f | head -n 1)
-          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang-aosp -name "clang" -type f | grep "bin/clang" | head -n 1)
-
-          if [ -z "$GCC64_BIN" ]; then
-            echo "STILL EMPTY. Trying to force checkout of the binaries..."
-            cd $GITHUB_WORKSPACE/gcc64 && git checkout master && cd $GITHUB_WORKSPACE
-            GCC64_BIN=$(find $GITHUB_WORKSPACE/gcc64 -name "aarch64-linux-android-gcc" -type f | head -n 1)
-          fi
-
-          if [ -z "$GCC64_BIN" ]; then
-             echo "CRITICAL FAILURE: Even with full clone, Google is not serving binaries."
-             ls -la $GITHUB_WORKSPACE/gcc64
-             exit 1
-          fi
-
-          echo "GCC64_PATH=$(dirname $GCC64_BIN)" >> $GITHUB_ENV
-          echo "GCC32_PATH=$(dirname $GCC32_BIN)" >> $GITHUB_ENV
-          echo "CLANG_PATH=$(dirname $CLANG_BIN)" >> $GITHUB_ENV
+          echo "Checking GCC64..."
+          gcc64/bin/aarch64-linux-android-gcc --version | head -n 1
+          echo "Checking GCC32..."
+          gcc32/bin/arm-linux-androideabi-gcc --version | head -n 1
+          echo "Checking Clang..."
+          clang-aosp/bin/clang --version | head -n 1
 
       - name: Build Kernel
         run: |
-          export PATH="$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang-aosp/bin:$GITHUB_WORKSPACE/gcc64/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH"
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
@@ -58,10 +41,25 @@ jobs:
           cd kernel-source
           mkdir -p out
           cp $GITHUB_WORKSPACE/running.config out/.config
-          
-          # Force HID configuration for your prototype
+
+          echo "Configuring HID Mouse and Sensor drivers..."
           scripts/config --file out/.config --enable CONFIG_USB_G_HID
           scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          scripts/config --file out/.config --enable CONFIG_HID_GENERIC
+          scripts/config --file out/.config --enable CONFIG_INPUT_EVDEV
+          scripts/config --file out/.config --enable CONFIG_INPUT_UINPUT
+          scripts/config --file out/.config --enable CONFIG_HIDRAW
+          
+          echo "Verifying enabled flags in .config..."
+          grep -E "CONFIG_USB_G_HID|CONFIG_USB_CONFIGFS_F_HID|CONFIG_INPUT_UINPUT|CONFIG_HID_GENERIC" out/.config
 
+          echo "Starting Make..."
           make O=out ARCH=arm64 CROSS_COMPILE=$CROSS_COMPILE ellis_defconfig
-          make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
+          time make -j$(nproc) O=out ARCH=arm64 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz-dtb
+
+      - name: Upload Kernel
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moto-G-Pure-HID-Kernel
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
