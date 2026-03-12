@@ -1,44 +1,36 @@
-name: Moto Build V2 Fresh Environment
+name: Moto G Pure Manual Toolchain Build
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # Switching to 22.04 forces GitHub to provision a different VM pool
-    runs-on: ubuntu-22.04
-    
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Your Repository
         uses: actions/checkout@v4
         with:
           path: main-repo
 
-      # This saves the kernel folder after the first successful download
-      - name: Cache Kernel Source
-        id: cache-kernel
-        uses: actions/cache@v4
-        with:
-          path: kernel-source
-          key: ${{ runner.os }}-kernel-mt6762-v2
-
-      - name: Install Build Essentials
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
-
-      - name: Fetch Kernel Source (Bypassing Token)
-        # This step ONLY runs if the cache is empty
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+      - name: Fetch Kernel Source
         run: |
           git clone --depth=1 https://github.com/LineageOS/android_kernel_motorola_mt6762.git kernel-source
 
+      - name: Download & Setup Manual Toolchain
+        run: |
+          # Downloading the specific GCC 10.3 toolchain
+          wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
+          tar -xvf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
+          mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu toolchain
+
       - name: Build Kernel
         run: |
+          # 1. Setup paths
           cd kernel-source
+          export TOOLCHAIN_PATH=$(pwd)/../toolchain/bin/aarch64-none-linux-gnu-
           cp ../main-repo/running.config .config
           
-          # Injections for HID and Booting
+          # 2. Inject HID & Permissive flags
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
@@ -47,16 +39,16 @@ jobs:
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # Patching and Compiling
+          # 3. Patch & Compile using the manual toolchain
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
+          make ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH olddefconfig
+          make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH KCFLAGS="-Wno-error" Image.gz
           
-          # Fusing the DTB for the Moto G Pure (ellis)
+          # 4. Final Fusion
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
-      - name: Upload Final Kernel
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HID-Kernel-Combined
+          name: HID-Kernel-Manual-Build
           path: kernel-source/arch/arm64/boot/Image.gz-dtb
