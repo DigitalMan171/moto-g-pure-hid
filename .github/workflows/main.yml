@@ -26,6 +26,11 @@ jobs:
           # The branch from your build ID in the correct MTK repo
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
+      - name: List Available Configs
+        run: |
+          cd kernel-source
+          find arch/arm64/configs -name "*defconfig*"
+
       - name: Build Kernel
         run: |
           export PATH=$(pwd)/clang-aosp/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
