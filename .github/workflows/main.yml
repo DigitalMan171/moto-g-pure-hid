@@ -1,4 +1,4 @@
-name: Ellis Surgical Build - FINAL PATH FIX
+name: Ellis Surgical Build - Motorola Spec Verification
 on:
   workflow_dispatch:
 
@@ -6,54 +6,52 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Source (Proven Branch)
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive' # Ensure we get the vendor/scripts folders
+          ref: 'android-12-release-s3rhs32.20-42-10-4-11'
 
-      - name: Set up Build Environment
+      - name: Fetch Toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
-          sudo apt-get install -y clang-11 lld-11 llvm-11 gcc-aarch64-linux-gnu
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86 clang-aosp
 
-      - name: Configure and Build
+      - name: Layered Configuration & Verification
         run: |
-          # 1. FIND THE KERNEL ROOT
-          # Sometimes 'checkout' puts things in a subfolder. We find the Makefile.
-          KERNEL_ROOT=$(find . -name Makefile -exec dirname {} + | head -n 1)
-          cd "$KERNEL_ROOT"
-          echo "Current working directory is: $(pwd)"
-          
-          # 2. FIND THE CONFIG
-          # We look for ANY ellis config or use the 'running.config' we saved.
-          REAL_CONFIG=$(find . -name "*ellis_defconfig*" -o -name "running.config" | head -n 1)
-          
-          if [ -z "$REAL_CONFIG" ]; then
-            echo "STILL NO CONFIG FOUND. Listing files for manual review:"
-            ls -R | grep "defconfig" | head -n 20
-            exit 1
-          fi
-          
-          # 3. PREP & MERGE
           mkdir -p out
-          cp "$REAL_CONFIG" out/.config
           
-          # 4. INJECT HID DRIVERS (The Goal)
+          # 1. MOTOROLA SPEC MERGE (The 'Layered Cake')
+          # We stack Base -> Consolidated -> Ellis
+          cat arch/arm64/configs/k65v1_64_bsp_defconfig \
+              arch/arm64/configs/vendor/moto-consolidate.config \
+              arch/arm64/configs/vendor/ellis_defconfig.config > out/.config
+          
+          # 2. INJECT OUR HID FIXES
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
             echo "CONFIG_USB_HID=y"
-            echo "CONFIG_SECURITY_SELINUX=y"
-            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
           } >> out/.config
+          
+          # 3. VERIFICATION (Manufacturer Check)
+          echo "--- VERIFYING MERGE ---"
+          if grep -q "CONFIG_USB_HID=y" out/.config && grep -q "CONFIG_MTK_TOUCH_PANEL" out/.config; then
+            echo "✅ SUCCESS: Both Motorola drivers and HID drivers are present."
+            tail -n 15 out/.config
+          else
+            echo "❌ ERROR: Merge failed. One or more layers are missing."
+            exit 1
+          fi
 
-          # 5. COMPILE
-          make O=out ARCH=arm64 CC=clang-11 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-          make O=out ARCH=arm64 CC=clang-11 LD=ld.lld-11 -j$(nproc) Image.gz
+          # 4. FINALIZE CONFIG
+          make O=out ARCH=arm64 \
+            CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
+            CC=$(pwd)/clang-aosp/clang-r416183b1/bin/clang \
+            olddefconfig
 
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Ellis-Surgical-Kernel
-          path: "**/out/arch/arm64/boot/Image.gz"
+      - name: Compile
+        run: |
+          make O=out ARCH=arm64 \
+            CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
+            CC=$(pwd)/clang-aosp/clang-r416183b1/bin/clang \
+            -j$(nproc) Image.gz
