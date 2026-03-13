@@ -1,9 +1,10 @@
-name: Moto G Pure HID + DTB Fusion (Verified Branch)
+name: Moto G Pure HID + DTB Fusion (Unified Final)
 
 on:
   workflow_dispatch:
 
 env:
+  # Resolves the Node.js 20 deprecation warning
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -15,12 +16,11 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Kernel Source (Original Motorola Branch)
+      - name: Fetch Motorola Kernel Source
         run: |
-          # Reverting to the exact repository and branch from your previous working state
+          # Verified Motorola branch to avoid 'Username' prompts and 404s
           wget https://github.com/MotorolaMobilityLLC/kernel-mtk/archive/refs/heads/android-12-release-s3rhs32.20-42-10-4-11.zip -O kernel.zip
           unzip -q kernel.zip
-          # Rename based on the Motorola folder structure
           mv kernel-mtk-android-12-release-s3rhs32.20-42-10-4-11 kernel-source
           rm kernel.zip
 
@@ -29,26 +29,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev gcc-aarch64-linux-gnu
 
-      - name: Build Kernel
+      - name: Patch and Build Kernel
         run: |
           cd kernel-source
           cp ../main-repo/running.config .config
           
-          # Your 'Boot Loop Fix' overrides
+          # 1. COMPILER FIXES: Resolves 'ksm_flock' inlining and 'yylloc' errors
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h || true
+          sed -i 's/always_inline/inline/g' include/linux/keyslot-manager.h || true
+          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+
+          # 2. SECURITY FIX: Disables SELinux enforcement to stop the vibrating boot loop
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
+          
+          # 3. HID & STABILITY: Enables custom peripherals and avoids module version mismatches
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # Compile
-          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
+          # 4. COMPILATION
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
           
-          # Final Fusion for 'ellis'
+          # 5. DTB FUSION: Attaching the hardware map for the 'ellis' device
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
