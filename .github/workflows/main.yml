@@ -17,33 +17,29 @@ jobs:
 
       - name: Configure and Patch
         run: |
-          # 1. PREP
+          # 1. VERSION TRICKING
           touch .scmversion
           export LOCALVERSION=""
           mkdir -p out
           
-          # 2. THE OFFICIAL MOTOROLA TRIPLE-MERGE
-          # Protocol: Base (Generic) -> Consolidate (Moto Shared) -> Ellis (Hardware Specific)
-          # We concatenate them into a single fragment to feed to the kernel's native tool
-          cat arch/arm64/configs/vendor/moto-consolidate.config \
+          # 2. MOTOROLA PROTOCOL: TRIPLE MERGE
+          # We manually stack the files because Motorola's build script is missing.
+          # Base + Motorola Platform + Ellis Hardware
+          cat arch/arm64/configs/k65v1_64_bsp_defconfig \
+              arch/arm64/configs/vendor/moto-consolidate.config \
               arch/arm64/configs/vendor/ext_config/moto-mt6765-ellis.config > out/ellis_merged.config
           
-          # 3. GENERATE FINAL CONFIG
-          # We use the generic ARMv8 base and apply our merged Ellis fragment
-          make O=out ARCH=arm64 \
-            KCONFIG_ALLCONFIG=out/ellis_merged.config \
-            genericarmv8-64_defconfig
+          # 3. NATIVE MERGE (No merge_config.sh needed)
+          # We tell 'make' to use our merged file as the rulebook.
+          make O=out ARCH=arm64 KCONFIG_ALLCONFIG=out/ellis_merged.config alldefconfig
           
-          # 4. INJECT HID & SECURITY FIXES
+          # 4. INJECT HID & SECURITY FLAGS
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
             echo "CONFIG_USB_HID=y"
             echo "CONFIG_SECURITY_SELINUX=y"
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
-            echo "# CONFIG_SECURITY_SELINUX_DEVELOP is not set"
-            echo "# CONFIG_MODULE_SIG is not set"
-            echo "# CONFIG_MODVERSIONS is not set"
           } >> out/.config
           
           # Finalize
