@@ -17,19 +17,16 @@ jobs:
 
       - name: Configure and Patch
         run: |
-          # 1. VERSION TRICKING
+          # 1. PREP
           touch .scmversion
           export LOCALVERSION=""
           mkdir -p out
           
-          # 2. OFFICIAL PATH DEFINITIONS
-          # Motorola MTK 4.19 Protocol:
-          # Base: k65v1_64_bsp_defconfig
-          # Fragment: vendor/ext_config/ellis-default.config
-          
-          # We use the built-in 'KCONFIG_ALLCONFIG' merge protocol
+          # 2. PROTOCOL MERGE
+          # We use the verified paths for the MT6765 Base and Ellis Fragment.
+          # KCONFIG_ALLCONFIG is the official internal tool for merging fragments.
           make O=out ARCH=arm64 \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/ext_config/ellis-default.config \
+            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/ellis_defconfig.config \
             k65v1_64_bsp_defconfig
           
           # 3. APPLY CUSTOM PERIPHERAL & SECURITY FLAGS
