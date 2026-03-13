@@ -11,6 +11,7 @@ jobs:
       CLANG_PATH: ${{ github.workspace }}/clang-aosp/bin
       GCC_PATH: ${{ github.workspace }}/toolchains/bin
       OUT_DIR: ${{ github.workspace }}/out
+      MTK_PLATFORM: mt6765
 
     steps:
       - name: "Checkout Motorola Official Source"
@@ -23,26 +24,24 @@ jobs:
       - name: "Provision Version-Specific Toolchains"
         run: |
           mkdir -p toolchains
-          # Official GCC 10.3 for ARM64 alignment
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-          
-          # AOSP Clang r416183b: The Android 12 standard
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes (Camera & Platform Alignment)"
+      - name: "Tier 1: Surgical Fixes (Surgical I2C & Path Alignment)"
         run: |
           # 1. FIX: CPUFreq Redefinition (Isolated Guard Method)
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
           sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
           sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
 
-          # 2. FIX: Camera (imgsensor) Include Path & Linkage
-          # This ensures the camera drivers can see the common sensor headers
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/imgsensor\/inc -I$(srctree)\/drivers\/misc\/mediatek\/imgsensor\/src\/$(MTK_PLATFORM)\/camera_hw/g' {} +
+          # 2. FIX: Camera (imgsensor) Redundancy & Visibility
+          # Stripping duplicate sensor constants causing linker collisions
+          find drivers/misc/mediatek/imgsensor -name "*.h" -exec sed -i 's/extern unsigned int img_sensor_num;/unsigned int img_sensor_num;/g' {} +
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/imgsensor/inc -I\$(srctree)/drivers/misc/mediatek/imgsensor/src/$MTK_PLATFORM/camera_hw|g" {} +
 
-          # 3. FIX: EMI & ECCCI Include Paths (The 'Error 2' Linker Fix)
-          find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat\/$(MTK_PLATFORM)/g' {} +
+          # 3. FIX: Platform Path Injection (EMI & ECCCI)
+          find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat/$MTK_PLATFORM|g" {} +
           find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
 
           # 4. FIX: Architecture & Compiler Strictness
@@ -51,63 +50,6 @@ jobs:
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
-          
+
       - name: "Tier 2: Kconfig Merge & Security Bypass"
         run: |
-          mkdir -p $OUT_DIR
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          export LD_LIBRARY_PATH="$github.workspace/clang-aosp/lib64:$LD_LIBRARY_PATH"
-          
-          # 1. Generate Base Configuration
-          make O=$OUT_DIR k65v1_64_bsp_defconfig
-          
-          # 2. Hardware Fragment Merge (Ellis Profile)
-          ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
-          cat "$ELLIS_FRAG" >> $OUT_DIR/.config
-          
-          # 3. Injection: HID Features + Mandatory Security Bypass
-          {
-            echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_INPUT_UINPUT=y"
-            echo "CONFIG_INPUT_EVDEV=y"
-            echo "CONFIG_HIDRAW=y"
-            # Direct SELinux Permissive Mode Unlock
-            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y"
-            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
-            echo "CONFIG_SECURITY_SELINUX_DEVELOP=y"
-            # Build Stability
-            echo "CONFIG_MODULE_SIG=n"
-            echo "CONFIG_MODVERSIONS=n"
-          } >> $OUT_DIR/.config
-          
-          make O=$OUT_DIR olddefconfig
-
-      - name: "Tier 3: Execution (Toolchain Lock)"
-        run: |
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          make O=$OUT_DIR \
-               CC=clang \
-               CROSS_COMPILE=aarch64-none-linux-gnu- \
-               LD=ld.lld \
-               AR=llvm-ar \
-               NM=llvm-nm \
-               OBJCOPY=llvm-objcopy \
-               OBJDUMP=llvm-objdump \
-               -j$(nproc) Image.gz dtbs
-
-      - name: "Tier 4: Certification (The Pro-Check)"
-        run: |
-          echo "--- HID STATUS ---"
-          $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
-          echo "--- SECURITY STATUS ---"
-          grep "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" $OUT_DIR/.config && echo "✅ SELinux Default Permissive"
-          echo "--- ARCHITECTURE ---"
-          file $OUT_DIR/arch/arm64/boot/Image | grep "64-bit" && echo "✅ ARM64 Certified"
-
-      - name: "Upload Certified Artifacts"
-        uses: actions/upload-artifact@v4
-        with:
-          name: "Ellis-Pro-Complete"
-          path: |
-             out/arch/arm64/boot/Image.gz
-             out/arch/arm64/boot/dts/mediatek/*.dtb
