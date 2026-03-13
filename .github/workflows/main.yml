@@ -13,18 +13,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
-          # Installing Clang 11 and the AArch64 cross-toolchain
           sudo apt-get install -y clang-11 lld-11 llvm-11 gcc-aarch64-linux-gnu
 
       - name: Configure and Patch
         run: |
-          # 1. FORCE VERSION MATCHING
+          # 1. VERSION TRICKING
           touch .scmversion
           export LOCALVERSION=""
           
-          # 2. GENERATE BASE CONFIG
-          # We are using the chipset-level base we found earlier
-          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
+          # 2. THE OFFICIAL MOTO MERGE
+          # We fuse the MT6765 Chipset base with the Ellis hardware specifics
+          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out \
+            arch/arm64/configs/k65v1_64_bsp_defconfig \
+            arch/arm64/configs/vendor/ellis_defconfig.config
           
           # 3. APPLY SURGICAL FIXES (The Loop Killers)
           ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
@@ -32,7 +33,7 @@ jobs:
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
           ./scripts/config --file out/.config --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
           
-          # Disable Module Signing (Crucial for custom HID drivers)
+          # Disable Module Signing 
           ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
           ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
           
@@ -41,12 +42,12 @@ jobs:
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
+          # Finalize the merged config
           make O=out ARCH=arm64 olddefconfig
 
       - name: Compile Kernel
         run: |
-          # Using LLVM=1 tells the Makefile to use the full LLVM suite (clang, lld, objcopy)
-          # which is much more stable for 4.19 kernels than mixing GCC and Clang.
+          # Full LLVM toolchain for a 4.19 kernel
           make O=out ARCH=arm64 \
           CC=clang-11 \
           LD=ld.lld-11 \
