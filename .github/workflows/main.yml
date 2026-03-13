@@ -21,13 +21,23 @@ jobs:
           touch .scmversion
           export LOCALVERSION=""
           
-          # 2. THE OFFICIAL MOTO MERGE
-          # We fuse the MT6765 Chipset base with the Ellis hardware specifics
-          ARCH=arm64 ./scripts/kconfig/merge_config.sh -O out \
+          # 2. LOCATE MERGE SCRIPT DYNAMICALLY
+          # Sometimes the script is in /scripts/kconfig, sometimes elsewhere.
+          MERGE_SCRIPT=$(find . -name merge_config.sh | head -n 1)
+          if [ -z "$MERGE_SCRIPT" ]; then
+            echo "Error: merge_config.sh not found in repository!"
+            exit 1
+          fi
+          chmod +x "$MERGE_SCRIPT"
+          echo "Using merge script at: $MERGE_SCRIPT"
+          
+          # 3. THE OFFICIAL MOTO MERGE
+          # Fusing Chipset (k65v1) + Device (Ellis)
+          ARCH=arm64 "$MERGE_SCRIPT" -O out \
             arch/arm64/configs/k65v1_64_bsp_defconfig \
             arch/arm64/configs/vendor/ellis_defconfig.config
           
-          # 3. APPLY SURGICAL FIXES (The Loop Killers)
+          # 4. APPLY SURGICAL FIXES (The Loop Killers)
           ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
@@ -37,7 +47,7 @@ jobs:
           ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
           ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
           
-          # 4. ENABLE PERIPHERAL DRIVERS
+          # 5. ENABLE PERIPHERAL DRIVERS
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
@@ -47,7 +57,6 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          # Full LLVM toolchain for a 4.19 kernel
           make O=out ARCH=arm64 \
           CC=clang-11 \
           LD=ld.lld-11 \
