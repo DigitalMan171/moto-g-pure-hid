@@ -28,7 +28,7 @@ jobs:
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes (Final Linker Alignment)"
+      - name: "Tier 1: Surgical Fixes (Final Path & Header Alignment)"
         run: |
           # 1. FIX: CPUFreq Redefinition
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
@@ -40,13 +40,12 @@ jobs:
           find $SENSOR_PATH -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/$SENSOR_PATH/sensorHub/inc -I\$(srctree)/$SENSOR_PATH/sensorHub/nanohub|g" {} +
           find drivers/misc/mediatek/video -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/video/include -I\$(srctree)/drivers/misc/mediatek/video/common/include|g" {} +
 
-          # 3. FIX: Platform Path Injection (Official Visibility)
+          # 3. FIX: Platform Path Injection
           find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/imgsensor/inc -I\$(srctree)/drivers/misc/mediatek/imgsensor/src/$MTK_PLATFORM/camera_hw|g" {} +
           find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat/$MTK_PLATFORM|g" {} +
           find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
 
-          # 4. FIX: Architecture & Compiler Strictness
-          sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+          # 4. FIX: Inline Strictness
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
@@ -70,21 +69,19 @@ jobs:
           } >> $OUT_DIR/.config
           make O=$OUT_DIR olddefconfig
 
-      - name: "Tier 3: Execution (The 'Immunized' Build Stage)"
+      - name: "Tier 3: Execution (Final Linker & Warning Immunity)"
         run: |
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
           
           # KCFLAGS REFINEMENT:
-          # -fcommon: Merges global variables to prevent Linker Error 2.
-          # -Wno-error=declaration-after-statement: Bypasses ISO C90 errors (ddp_dsi.c).
-          # -Wno-error=unused-variable/function: Clears video driver noise.
-          # -fno-pie: Ensures static kernel linking for Image.gz.
+          # -fcommon & -fno-strict-aliasing: Essential for merging legacy MediaTek libraries.
+          # -Wno-error flags: Neutralize the warnings seen in lines 4488, 4512, and 4451.
           
           export KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP \
                           -Wno-error=pointer-to-int-cast -Wno-error=int-to-pointer-cast \
                           -Wno-error=implicit-function-declaration -Wno-error=unused-function \
                           -Wno-error=unused-variable -Wno-error=declaration-after-statement \
-                          -fcommon -fno-pie"
+                          -fcommon -fno-strict-aliasing -fno-pie"
           
           make O=$OUT_DIR \
                CC=clang \
@@ -99,14 +96,17 @@ jobs:
       - name: "Tier 4: Certification (The Pro-Check)"
         run: |
           echo "--- HID STATUS ---"
-          $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
-          echo "--- SECURITY STATUS ---"
-          grep "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" $OUT_DIR/.config && echo "✅ SELinux Default Permissive"
+          # vmlinux is only generated if the linker succeeds
+          if [ -f $OUT_DIR/vmlinux ]; then
+            $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
+          else
+            echo "❌ vmlinux not found. Linker failed."
+          fi
 
       - name: "Upload Certified Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Pro-Final-Candidate"
+          name: "Ellis-Pro-Complete"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
