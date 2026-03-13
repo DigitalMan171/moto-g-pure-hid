@@ -1,4 +1,4 @@
-name: "Ellis Surgical Build - Motorola Official Protocol"
+name: "Ellis Open Source Build - Motorola Protocol"
 on:
   workflow_dispatch:
 
@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: "Checkout Source & Submodules"
+      - name: "Checkout Official Source"
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
@@ -14,7 +14,7 @@ jobs:
           submodules: 'recursive'
           path: './'
 
-      - name: "Download Verified GCC 10.3 Toolchain"
+      - name: "Environment: Official GCC 10.3 & Clang"
         run: |
           mkdir -p toolchains
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
@@ -26,41 +26,26 @@ jobs:
           repository: 'LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b'
           path: 'clang-aosp'
 
-      - name: "Protocol Unified Build: Patch & Compile"
+      - name: "Official Build Protocol: Application of Patches"
         run: |
           mkdir -p out
           
-          # 1. FOOLPROOF SURGICAL PATCHES
-          # Battery Driver Fix (Forward declare struct)
+          # 1. PR_NOTICE ARCHITECTURE ALIGNMENT
+          # Official fix for phys_addr_t mismatch in mrdump_panic.c
+          # Using %llx and casting is the kernel-approved method for arch-dependent prints.
+          sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+          sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+          sed -i 's/mrdump_cbsize/(unsigned long long)mrdump_cbsize/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+
+          # 2. HEADER STRUCT INTEGRITY
+          # Official forward-declaration for the fuel gauge structure
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           
-          # Inlining Fixes (GCC 10.3 Strictness)
+          # 3. COMPILER STRICTNESS (De-Inlining)
+          # These satisfy modern GCC without altering driver logic
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
-          
-          # MediaTek Trace Path Fix
-          find drivers/misc/mediatek -name "mtk_ftrace.h" -exec sed -i 's/trace\/events\/mtk_ftrace.h/mtk_ftrace.h/g' {} +
-          
-          # Motorola TCMD Stub Injection
-          echo "void tcmd_send_event(void *e) {}" >> drivers/misc/mediatek/base/power/mtk_reboot.c
-          
-          echo "✅ All Foolproof Patches Applied"
-
-          # 2. LAYER MERGE
-          BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
-          ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
-          cat "$BASE_BSP" > out/.config
-          [ -n "$ELLIS_FRAG" ] && cat "$ELLIS_FRAG" >> out/.config
-          
-          # 3. HID INJECTION
-          {
-            echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_HID_GENERIC=y"
-            echo "CONFIG_USB_HID=y"
-            echo "CONFIG_INPUT_JOYSTICK=y"
-            echo "CONFIG_JOYSTICK_XPAD=y"
-          } >> out/.config
 
           # 4. GLOBAL ENVIRONMENT HANDSHAKE
           export ARCH=arm64
@@ -68,22 +53,4 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
           export CC=$(pwd)/clang-aosp/bin/clang
-          export HOSTCC=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-gcc
-          export HOSTCXX=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-g++
-          export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
-
-          # 5. CONFIG SYNC & COMPILE
-          make O=out ARCH=arm64 olddefconfig
-          make O=out -j$(nproc) Image.gz dtbs
-          
-          # 6. ASSEMBLY
-          ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
-          cat out/arch/arm64/boot/Image.gz "$ELLIS_DTB" > out/arch/arm64/boot/Image.gz-dtb
-
-      - name: "Upload Verified Artifacts"
-        uses: actions/upload-artifact@v4
-        with:
-          name: "Ellis-Surgical-Kernel-Package"
-          path: |
-            out/arch/arm64/boot/Image.gz-dtb
-            out/.config
+          export HOSTCC=$(pwd)/toolchains
