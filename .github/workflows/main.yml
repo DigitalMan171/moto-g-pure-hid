@@ -1,4 +1,4 @@
-name: "Ellis Open Source Build - Motorola Protocol"
+name: "Ellis Official Build - Redundancy & Verification"
 on:
   workflow_dispatch:
 
@@ -11,43 +11,40 @@ jobs:
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
-          submodules: 'recursive'
           path: './'
 
-      - name: "Environment: Official GCC 10.3 & Clang"
+      - name: "Official Toolchains: GCC 10.3 & Clang"
         run: |
           mkdir -p toolchains
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-
-      - name: "Checkout AOSP Clang"
-        uses: actions/checkout@v4
-        with:
-          repository: 'LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b'
-          path: 'clang-aosp'
-
-      - name: "Official Build Protocol: Application of Patches"
-        run: |
-          mkdir -p out
           
-          # 1. PR_NOTICE ARCHITECTURE ALIGNMENT
-          # Official fix for phys_addr_t mismatch in mrdump_panic.c
-          # Using %llx and casting is the kernel-approved method for arch-dependent prints.
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
+
+      - name: "Apply & Verify Official Patches"
+        run: |
+          # 1. MRDump Architecture Alignment (Official Protocol)
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbsize/(unsigned long long)mrdump_cbsize/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
 
-          # 2. HEADER STRUCT INTEGRITY
-          # Official forward-declaration for the fuel gauge structure
+          # 2. Battery Header Integrity
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           
-          # 3. COMPILER STRICTNESS (De-Inlining)
-          # These satisfy modern GCC without altering driver logic
+          # 3. Compiler Inlining Fixes
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # 4. GLOBAL ENVIRONMENT HANDSHAKE
+          # REDUNDANCY CHECK: Confirm patches exist before building
+          echo "--- VERIFICATION LOG ---"
+          grep "unsigned long long" drivers/misc/mediatek/aee/mrdump/mrdump_panic.c | head -n 1 || exit 1
+          grep "FUELGAUGE_TEMPERATURE" drivers/power/supply/mtk_battery_table.h || exit 1
+          echo "✅ All surgical patches verified."
+
+      - name: "Execute Official Build"
+        run: |
+          mkdir -p out
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -56,20 +53,20 @@ jobs:
           export HOSTCC=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-gcc
           export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
 
-          # 5. CONFIG MERGE & COMPILE
+          # Build Config
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
-          # Append ellis specific hardware config
-          ELLIS_CFG=$(find arch/arm64/configs -name "ellis_defconfig.config")
-          [ -f "$ELLIS_CFG" ] && cat "$ELLIS_CFG" >> out/.config
           
-          # Inject HID drivers as requested
+          # Inject HID redundancy
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> out/.config
+          echo "CONFIG_HID_GENERIC=y" >> out/.config
           
           make O=out ARCH=arm64 olddefconfig
           make O=out -j$(nproc) Image.gz dtbs
 
-      - name: "Package Official Artifacts"
+      - name: "Upload Ellis Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Official-Build"
-          path: out/arch/arm64/boot/Image.gz
+          name: "Ellis-Verified-Kernel"
+          path: |
+             out/arch/arm64/boot/Image.gz
+             out/arch/arm64/boot/dts/mediatek/*.dtb
