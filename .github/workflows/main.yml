@@ -4,7 +4,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Switching to 22.04 because it still has native support for Clang 11
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
@@ -13,29 +14,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
-          # Using Clang 11 as identified from your 'getvar' logs
+          # Clang 11 is available by default in the Ubuntu 22.04 repos
           sudo apt-get install -y clang-11 lld-11 llvm-11
+          
+          # Install the Android Cross-Compilers for AArch64
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Configure and Patch
         run: |
           # 1. FORCE VERSION MATCHING
-          # This prevents the 'plus sign' (+) from being added to the version string
-          # which causes vendor modules to reject the kernel.
           touch .scmversion
           export LOCALVERSION=""
           
           # 2. GENERATE BASE CONFIG
-          # Replace 'ellis_defconfig' with your actual defconfig name if different
           make O=out ARCH=arm64 ellis_defconfig
           
           # 3. APPLY SURGICAL FIXES (The Loop Killers)
-          # Disable SELinux Enforcement (Force Permissive)
           ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
           ./scripts/config --file out/.config --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
           
-          # Disable Module Signing (Crucial for loading new HID drivers)
+          # Disable Module Signing 
           ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
           ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
           
@@ -51,7 +51,7 @@ jobs:
           make O=out ARCH=arm64 \
           CC=clang-11 \
           CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
           -j$(nproc) Image.gz
 
       - name: Upload Build Artifacts
