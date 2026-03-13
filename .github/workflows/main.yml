@@ -1,4 +1,4 @@
-name: Moto G Pure HID + DTB Fusion (Final Verified)
+name: Moto G Pure HID + DTB Fusion (Master Protocol)
 
 on:
   workflow_dispatch:
@@ -16,7 +16,6 @@ jobs:
           path: main-repo
 
       - name: Fetch Kernel Source (Stealth Bypass)
-        # CONFLICT RESOLUTION: Uses ZIP to bypass Git Auth errors
         run: |
           wget https://github.com/MotorolaMobilityLLC/kernel-mtk/archive/refs/heads/android-12-release-s3rhs32.20-42-10-4-11.zip -O kernel.zip
           unzip -q kernel.zip
@@ -24,63 +23,49 @@ jobs:
           rm kernel.zip
 
       - name: Setup GCC 10.3 Toolchain
-        # CONFLICT RESOLUTION: Uses the 'Goldilocks' compiler to avoid strictness errors
         run: |
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xvf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu toolchain
 
-      - name: Build Kernel (Unified Protocol)
+      - name: Build Kernel (Unified Developer Protocol)
         run: |
           cd kernel-source
           export TOOLCHAIN_PATH=$(pwd)/../toolchain/bin/aarch64-none-linux-gnu-
           cp ../main-repo/running.config .config
           
-          # --- 1. THE "DEVELOPER PROTOCOL" (Source Shims) ---
-          # Resolved: Inlining panics in Scheduler and Keyslot Manager
+          # --- 1. ARCHITECTURE & DRIVER SYNC (The "Drivers" Fix) ---
+          # Prevents 32-bit/64-bit conflicts in MediaTek GPU and Media drivers
+          sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' .config
+          sed -i 's/CONFIG_ARCH_MULTI_V7=y/CONFIG_ARCH_V8A=y/' .config
+          
+          # --- 2. CODE SHIMS (The "Hurdle" Fixes) ---
+          # Resolves Inlining and Pathing errors found yesterday
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h || true
           sed -i 's/always_inline/inline/g' include/linux/keyslot-manager.h || true
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h || true
-          
-          # Resolved: MediaTek Tracing "File Not Found" pathing bug
           sed -i 's/#define TRACE_INCLUDE_PATH .$/#define TRACE_INCLUDE_PATH ..\/..\/kernel\/trace/g' kernel/trace/mtk_ftrace.h || true
-          
-          # Resolved: Multiple definitions of yylloc (DTC Fix)
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
 
-          # --- 2. THE "STABILITY LAYER" (Boot Fixes) ---
-          # Resolved: Security-triggered vibration boot loops via Permissive SELinux
+          # --- 3. THE "SUCCESS" LAYER (Security & Modules) ---
+          # Disables signing and keyrings to prevent final-stage link crashes
+          sed -i 's/CONFIG_MODULE_SIG=y/CONFIG_MODULE_SIG=n/' .config
+          sed -i 's/CONFIG_SYSTEM_TRUSTED_KEYRING=y/CONFIG_SYSTEM_TRUSTED_KEYRING=n/' .config
+          
+          # Force HID features and SELinux Permissive (prevents vibration loops)
           {
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y"
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
-            echo "CONFIG_SECURITY_SELINUX_DEVELOP=y"
-            echo "CONFIG_MODULE_SIG=n"
-            echo "CONFIG_MODVERSIONS=n"
-          } >> .config
-          
-          # --- 3. THE "HID LAYER" (Hardware Enablement) ---
-          # Resolved: Late-loading driver failures by making them Built-In (y)
-          {
             echo "CONFIG_USB_G_HID=y"
             echo "CONFIG_USB_F_HID=y"
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
-            echo "CONFIG_INPUT_JOYSTICK=y"
-            echo "CONFIG_JOYSTICK_XPAD=y"
-            echo "CONFIG_INPUT_MOUSE=y"
+            echo "CONFIG_MODVERSIONS=n"
           } >> .config
 
           # --- 4. EXECUTION ---
-          # olddefconfig ensures the new 'echo' flags are integrated without conflict
           make ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH KCFLAGS="-Wno-error" Image.gz
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH dtbs
           
           # --- 5. THE FUSION ---
-          # Verified manufacturer method for Moto G Pure (ellis)
-          cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HID-Kernel-Combined-Final
-          path: kernel-source/arch/arm64/boot/Image.gz-dtb
+          # Manufacturer-verified path for the Moto G Pure (ellis
