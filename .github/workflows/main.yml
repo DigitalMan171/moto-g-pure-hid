@@ -4,7 +4,6 @@ on:
 
 jobs:
   build:
-    # Switching to 22.04 because it still has native support for Clang 11
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Kernel Source
@@ -14,11 +13,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
-          # Clang 11 is available by default in the Ubuntu 22.04 repos
-          sudo apt-get install -y clang-11 lld-11 llvm-11
-          
-          # Install the Android Cross-Compilers for AArch64
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          # Installing Clang 11 and the AArch64 cross-toolchain
+          sudo apt-get install -y clang-11 lld-11 llvm-11 gcc-aarch64-linux-gnu
 
       - name: Configure and Patch
         run: |
@@ -27,7 +23,8 @@ jobs:
           export LOCALVERSION=""
           
           # 2. GENERATE BASE CONFIG
-          make O=out ARCH=arm64 ellis_defconfig
+          # We are using the chipset-level base we found earlier
+          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
           
           # 3. APPLY SURGICAL FIXES (The Loop Killers)
           ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
@@ -35,7 +32,7 @@ jobs:
           ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
           ./scripts/config --file out/.config --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
           
-          # Disable Module Signing 
+          # Disable Module Signing (Crucial for custom HID drivers)
           ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
           ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
           
@@ -48,8 +45,16 @@ jobs:
 
       - name: Compile Kernel
         run: |
+          # Using LLVM=1 tells the Makefile to use the full LLVM suite (clang, lld, objcopy)
+          # which is much more stable for 4.19 kernels than mixing GCC and Clang.
           make O=out ARCH=arm64 \
           CC=clang-11 \
+          LD=ld.lld-11 \
+          AR=llvm-ar-11 \
+          NM=llvm-nm-11 \
+          OBJCOPY=llvm-objcopy-11 \
+          OBJDUMP=llvm-objdump-11 \
+          STRIP=llvm-strip-11 \
           CLANG_TRIPLE=aarch64-linux-gnu- \
           CROSS_COMPILE=aarch64-linux-gnu- \
           -j$(nproc) Image.gz
