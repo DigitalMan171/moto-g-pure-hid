@@ -1,5 +1,4 @@
-name: Ellis Surgical Build - Motorola Official Protocol
-
+name: Ellis Surgical Build - Protocol Corrected
 on:
   workflow_dispatch:
 
@@ -37,6 +36,7 @@ jobs:
           
           # IDENTIFY LAYERS
           BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
+          # Using backticks or $() correctly to capture the find result
           ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
           
           echo "Using Base: $BASE_BSP"
@@ -44,9 +44,11 @@ jobs:
 
           # MERGE AS PER MOTO SPEC
           cat "$BASE_BSP" > out/.config
-          [ -n "$ELLIS_FRAG" ] && cat "$ELLIS_FRAG" >> out/.config
+          if [ -n "$ELLIS_FRAG" ]; then
+            cat "$ELLIS_FRAG" >> out/.config
+          fi
           
-          # INJECT HID PATCH (Our modification)
+          # INJECT HID PATCH
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
@@ -67,17 +69,15 @@ jobs:
             CC=$(pwd)/clang-aosp/bin/clang \
             -j$(nproc) Image.gz dtbs
           
-          # APPEND DTB (Motorola Requirement for booting)
-          # We look for the 'ellis' binary hardware map
+          # APPEND DTB (Motorola Requirement)
           ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
           if [ -z "$ELLIS_DTB" ]; then
-             echo "❌ CRITICAL ERROR: Ellis DTB not found. Image will not boot."
+             echo "❌ CRITICAL ERROR: Ellis DTB not found."
              exit 1
           fi
           
-          echo "Appending $ELLIS_DTB to Image.gz..."
           cat out/arch/arm64/boot/Image.gz "$ELLIS_DTB" > out/arch/arm64/boot/Image.gz-dtb
-          echo "✅ Final Assembly Complete: Image.gz-dtb"
+          echo "✅ Final Assembly Complete"
 
       - name: Upload Verified Artifacts
         uses: actions/upload-artifact@v4
