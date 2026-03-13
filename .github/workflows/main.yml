@@ -30,25 +30,24 @@ jobs:
           # AOSP Clang r416183b: The Android 12 standard
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes (Isolated Guard Method)"
+      - name: "Tier 1: Surgical Fixes (Full Platform Alignment)"
         run: |
-          # 1. FIX: mt_cpu_dvfs_id Redefinition (The Error 2 fix)
+          # 1. FIX: CPUFreq Redefinition (Isolated Guard Method)
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
-          # Wrap the enum start
           sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
-          # Wrap the enum end specifically to avoid doubling #endif at end of file
           sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
 
-          # 2. FIX: Address Width Mismatches (mrdump/pbm)
+          # 2. FIX: EMI & ECCCI Include Paths (The 'Error 2' Linker Fix)
+          find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat\/$(MTK_PLATFORM)/g' {} +
+          find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
+
+          # 3. FIX: Architecture & Compiler Strictness
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
-          sed -i 's/\[%s\]/\[%u\]/g' drivers/misc/mediatek/base/power/pbm_v4/mtk_pbm.c
-
-          # 3. FIX: Global Compiler Strictness
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
-
+          
       - name: "Tier 2: Kconfig Merge & Security Bypass"
         run: |
           mkdir -p $OUT_DIR
