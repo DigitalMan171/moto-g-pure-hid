@@ -1,4 +1,4 @@
-name: Ellis Surgical Build - Protocol Fix
+name: Ellis Surgical Build - Auth & Protocol Fixed
 on:
   workflow_dispatch:
 
@@ -9,22 +9,25 @@ jobs:
       - name: Checkout Official Motorola Source
         uses: actions/checkout@v4
         with:
-          # We pull DIRECTLY from the source to ensure layers exist
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
-      - name: Fetch Restored Toolchains
+      - name: Fix Git Auth & Fetch Toolchains
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86 clang-aosp
+          # The Proven Fix: Force HTTPS and bypass username prompts
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git config --global url."https://".insteadOf git://
+          
+          # Clone using the runner's token for authentication
+          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/LineageOS/android_prebuilts_clang_host_linux-x86 clang-aosp
 
       - name: Layered Configuration & Verification
         run: |
           mkdir -p out
           
-          # MOTOROLA SPEC MERGE
-          # Layer 1: Base | Layer 2: Consolidated | Layer 3: Ellis
+          # MOTOROLA SPEC MERGE (The 'Layered Cake')
           cat arch/arm64/configs/k65v1_64_bsp_defconfig \
               arch/arm64/configs/vendor/moto-consolidate.config \
               arch/arm64/configs/vendor/ellis_defconfig.config > out/.config
@@ -36,11 +39,11 @@ jobs:
             echo "CONFIG_USB_HID=y"
           } >> out/.config
           
-          # PROTOCOL VERIFICATION
+          # VERIFICATION
           echo "--- STARTING PROTOCOL VERIFICATION ---"
-          grep "CONFIG_MTK_PLATFORM" out/.config && echo "✅ Layer 1 Present"
-          grep "CONFIG_MTK_TOUCH_PANEL" out/.config && echo "✅ Layer 3 Present"
-          grep "CONFIG_USB_HID=y" out/.config && echo "✅ HID Patch Present"
+          grep "CONFIG_MTK_PLATFORM" out/.config && echo "✅ Layer 1 (Base) Present"
+          grep "CONFIG_MTK_TOUCH_PANEL" out/.config && echo "✅ Layer 3 (Hardware) Present"
+          grep "CONFIG_USB_HID=y" out/.config && echo "✅ HID Patch Injected"
 
           # FINALIZE
           make O=out ARCH=arm64 \
@@ -54,3 +57,9 @@ jobs:
             CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
             CC=$(pwd)/clang-aosp/clang-r416183b1/bin/clang \
             -j$(nproc) Image.gz
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ellis-Surgical-Kernel
+          path: out/arch/arm64/boot/Image.gz
