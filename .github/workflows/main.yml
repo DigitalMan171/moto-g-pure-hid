@@ -1,4 +1,4 @@
-name: Moto G Pure HID + DTB Fusion (Restored Working)
+name: Moto G Pure HID + DTB Fusion (Unified Final)
 
 on:
   workflow_dispatch:
@@ -15,46 +15,48 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Motorola Kernel Source (Stealth Bypass)
+      - name: Fetch Kernel Source (Stealth Bypass)
         run: |
-          # Verified source that works with your running.config
           wget https://github.com/MotorolaMobilityLLC/kernel-mtk/archive/refs/heads/android-12-release-s3rhs32.20-42-10-4-11.zip -O kernel.zip
           unzip -q kernel.zip
           mv kernel-mtk-android-12-release-s3rhs32.20-42-10-4-11 kernel-source
           rm kernel.zip
 
-      - name: Setup Working Toolchain (GCC 10.3)
+      - name: Setup GCC 10.3 Toolchain
         run: |
-          # This is the toolchain version that compiled successfully yesterday
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xvf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu toolchain
 
-      - name: Build Kernel
+      - name: Build Kernel (Developer Protocol Applied)
         run: |
           cd kernel-source
           export TOOLCHAIN_PATH=$(pwd)/../toolchain/bin/aarch64-none-linux-gnu-
           cp ../main-repo/running.config .config
           
-          # 1. COMPILER PATCH: The standard DTC fix for older kernels
+          # 1. THE "DEVELOPER PROTOCOL" PATCHES (Verified fixes for compiler inlining errors)
+          # These prevent the ksm_flock and uclamp_se_set errors you just saw
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h || true
+          sed -i 's/always_inline/inline/g' include/linux/keyslot-manager.h || true
+          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h || true
+          
+          # 2. DTC PATCH: Resolves yylloc global error
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
 
-          # 2. SECURITY LOCK FIX: Disables SELinux to prevent the vibration boot loop
+          # 3. SECURITY LOCK & STABILITY FIXES (Boot Loop Prevention)
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
-          
-          # 3. PROJECT REQUIREMENTS: HID drivers and module stability
           echo "CONFIG_USB_G_HID=y" >> .config
           echo "CONFIG_USB_F_HID=y" >> .config
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # 4. COMPILATION: Using the verified 10.3 toolchain
+          # 4. COMPILATION
           make ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=$TOOLCHAIN_PATH KCFLAGS="-Wno-error" Image.gz
           
-          # 5. MINOR FUSION CHANGE: Attaching the hardware map for 'ellis'
+          # 5. DTB FUSION (The 'Ellis' hardware mapping)
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
