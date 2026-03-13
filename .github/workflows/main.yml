@@ -26,52 +26,31 @@ jobs:
           repository: 'LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b'
           path: 'clang-aosp'
 
-      - name: Protocol Phase 1: Discovery & Configuration
+      - name: Protocol Phase 1
         run: |
           mkdir -p out
-          echo "--- LOGGING MOTOROLA BUILD SPECS ---"
           find . -name "defconfig.mk" -exec echo "Reading Spec: {}" \; -exec cat {} \;
-          
-          # Layer Discovery
           BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
           ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
-          
-          echo "Using Base: $BASE_BSP"
-          echo "Using Hardware Fragment: $ELLIS_FRAG"
-
           cat "$BASE_BSP" > out/.config
           if [ -n "$ELLIS_FRAG" ]; then
             cat "$ELLIS_FRAG" >> out/.config
-            echo "✅ Ellis hardware layer merged."
           fi
-          
-          # Inject HID Patch
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
             echo "CONFIG_USB_HID=y"
           } >> out/.config
+          make O=out ARCH=arm64 CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- CC=$(pwd)/clang-aosp/bin/clang olddefconfig
 
-          make O=out ARCH=arm64 \
-            CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
-            CC=$(pwd)/clang-aosp/bin/clang \
-            olddefconfig
-
-      - name: Protocol Phase 2: Compiling & Assembly
+      - name: Protocol Phase 2
         run: |
-          make O=out ARCH=arm64 \
-            CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
-            CC=$(pwd)/clang-aosp/bin/clang \
-            -j$(nproc) Image.gz dtbs
-          
+          make O=out ARCH=arm64 CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- CC=$(pwd)/clang-aosp/bin/clang -j$(nproc) Image.gz dtbs
           ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
           if [ -z "$ELLIS_DTB" ]; then
-             echo "❌ CRITICAL ERROR: Ellis DTB not found."
              exit 1
           fi
-          
           cat out/arch/arm64/boot/Image.gz "$ELLIS_DTB" > out/arch/arm64/boot/Image.gz-dtb
-          echo "✅ Final Assembly Complete: Image.gz-dtb"
 
       - name: Upload Verified Artifacts
         uses: actions/upload-artifact@v4
