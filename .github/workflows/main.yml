@@ -30,18 +30,22 @@ jobs:
           # AOSP Clang r416183b: The Android 12 standard
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes (Full Platform Alignment)"
+      - name: "Tier 1: Surgical Fixes (Camera & Platform Alignment)"
         run: |
           # 1. FIX: CPUFreq Redefinition (Isolated Guard Method)
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
           sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
           sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
 
-          # 2. FIX: EMI & ECCCI Include Paths (The 'Error 2' Linker Fix)
+          # 2. FIX: Camera (imgsensor) Include Path & Linkage
+          # This ensures the camera drivers can see the common sensor headers
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/imgsensor\/inc -I$(srctree)\/drivers\/misc\/mediatek\/imgsensor\/src\/$(MTK_PLATFORM)\/camera_hw/g' {} +
+
+          # 3. FIX: EMI & ECCCI Include Paths (The 'Error 2' Linker Fix)
           find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat\/$(MTK_PLATFORM)/g' {} +
           find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
 
-          # 3. FIX: Architecture & Compiler Strictness
+          # 4. FIX: Architecture & Compiler Strictness
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
