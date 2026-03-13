@@ -53,4 +53,23 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
           export CC=$(pwd)/clang-aosp/bin/clang
-          export HOSTCC=$(pwd)/toolchains
+          export HOSTCC=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-gcc
+          export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
+
+          # 5. CONFIG MERGE & COMPILE
+          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
+          # Append ellis specific hardware config
+          ELLIS_CFG=$(find arch/arm64/configs -name "ellis_defconfig.config")
+          [ -f "$ELLIS_CFG" ] && cat "$ELLIS_CFG" >> out/.config
+          
+          # Inject HID drivers as requested
+          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> out/.config
+          
+          make O=out ARCH=arm64 olddefconfig
+          make O=out -j$(nproc) Image.gz dtbs
+
+      - name: "Package Official Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "Ellis-Official-Build"
+          path: out/arch/arm64/boot/Image.gz
