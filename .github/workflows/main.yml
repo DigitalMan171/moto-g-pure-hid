@@ -1,4 +1,4 @@
-name: Moto G Pure HID + DTB Fusion
+name: Moto G Pure HID + DTB Fusion (Verified Branch)
 
 on:
   workflow_dispatch:
@@ -15,20 +15,13 @@ jobs:
         with:
           path: main-repo
 
-      - name: Fetch Kernel Source (Stealth Download)
+      - name: Fetch Kernel Source (Original Motorola Branch)
         run: |
-          # Try the most likely branch first (19.1)
-          # If 19.1 404s, we try 18.1 as a fallback.
-          wget -q https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-19.1.zip -O kernel.zip || \
-          wget -q https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-18.1.zip -O kernel.zip
-          
-          if [ ! -f kernel.zip ]; then
-            echo "Failed to find a valid branch ZIP. Checking master..."
-            wget -q https://github.com/LineageOS/android_kernel_motorola_mt6762/archive/refs/heads/lineage-20.zip -O kernel.zip
-          fi
-
+          # Reverting to the exact repository and branch from your previous working state
+          wget https://github.com/MotorolaMobilityLLC/kernel-mtk/archive/refs/heads/android-12-release-s3rhs32.20-42-10-4-11.zip -O kernel.zip
           unzip -q kernel.zip
-          mv android_kernel_motorola_mt6762-* kernel-source
+          # Rename based on the Motorola folder structure
+          mv kernel-mtk-android-12-release-s3rhs32.20-42-10-4-11 kernel-source
           rm kernel.zip
 
       - name: Install Build Essentials
@@ -41,7 +34,7 @@ jobs:
           cd kernel-source
           cp ../main-repo/running.config .config
           
-          # Security & Stability Overrides (The Boot Loop Fix)
+          # Your 'Boot Loop Fix' overrides
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> .config
           echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" >> .config
           echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> .config
@@ -50,12 +43,12 @@ jobs:
           echo "CONFIG_USB_CONFIGFS_F_HID=y" >> .config
           echo "CONFIG_MODVERSIONS=n" >> .config
           
-          # Compiling
+          # Compile
           sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
           make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" Image.gz
           
-          # Fusion: Combining the kernel with the 'ellis' hardware map
+          # Final Fusion for 'ellis'
           cat arch/arm64/boot/Image.gz arch/arm64/boot/dts/motorola/ellis.dtb > arch/arm64/boot/Image.gz-dtb
 
       - name: Upload Kernel Artifact
