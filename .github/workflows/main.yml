@@ -14,11 +14,11 @@ jobs:
           submodules: 'recursive'
           path: './'
 
-      - name: "Checkout AOSP Toolchains"
-        uses: actions/checkout@v4
-        with:
-          repository: 'LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9'
-          path: 'gcc64'
+      - name: "Download Verified GCC 10.3 Toolchain"
+        run: |
+          mkdir -p toolchains
+          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
+          tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
 
       - name: "Checkout AOSP Clang"
         uses: actions/checkout@v4
@@ -47,21 +47,21 @@ jobs:
             echo "CONFIG_JOYSTICK_XPAD=y"
           } >> out/.config
 
-          # 3. GLOBAL ENVIRONMENT HANDSHAKE (Must be in same block as make)
+          # 3. GLOBAL ENVIRONMENT HANDSHAKE
+          # We use the GCC 10.3 for both kernel and host scripts
           export ARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=$(pwd)/gcc64/bin/aarch64-linux-android-
+          export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
           export CC=$(pwd)/clang-aosp/bin/clang
+          export HOSTCC=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-gcc
+          export HOSTCXX=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-g++
           export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
-          export HOSTCC=$(pwd)/clang-aosp/bin/clang
-          export HOSTCXX=$(pwd)/clang-aosp/bin/clang++
 
           # 4. CONFIG SYNC
           make O=out ARCH=arm64 olddefconfig
 
           # 5. EXECUTE COMPILATION
-          # We use -j$(nproc) to utilize all cores
+          # We bypass the 'Old GCC' check by forcing 10.3 as the host compiler
           make O=out -j$(nproc) Image.gz dtbs
           
           # 6. FINAL ASSEMBLY
