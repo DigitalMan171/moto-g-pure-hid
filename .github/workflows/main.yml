@@ -65,3 +65,37 @@ jobs:
           ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS_F_HID
           ./scripts/config --file $OUT_DIR/.config -e HIDRAW
           ./scripts/config --file $OUT_DIR/.config -e INPUT_EVDEV
+          
+          # SECURITY: Disable SELinux and signature enforcement for peripheral dev
+          ./scripts/config --file $OUT_DIR/.config -d SECURITY_SELINUX
+          ./scripts/config --file $OUT_DIR/.config -e SECURITY_SELINUX_BOOTPARAM
+          ./scripts/config --file $OUT_DIR/.config --set-val SECURITY_SELINUX_BOOTPARAM_VALUE 0
+          ./scripts/config --file $OUT_DIR/.config -d MODULE_SIG
+          
+          make O=$OUT_DIR olddefconfig
+
+      - name: "Tier 3: Execution (The Non-Destructive Build)"
+        run: |
+          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
+          
+          # KCFLAGS: Merging legacy code with modern standards
+          export KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP \
+                          -Wno-error=pointer-to-int-cast -Wno-error=int-to-pointer-cast \
+                          -Wno-error=implicit-function-declaration -Wno-error=unused-function \
+                          -Wno-error=unused-variable -Wno-error=declaration-after-statement \
+                          -fcommon -fno-strict-aliasing -fno-pie"
+          
+          make O=$OUT_DIR \
+               CC=clang \
+               CROSS_COMPILE=aarch64-none-linux-gnu- \
+               LD=ld.lld \
+               KBUILD_LDFLAGS="--allow-multiple-definition" \
+               -j$(nproc) Image.gz dtbs
+
+      - name: "Upload Certified Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "Ellis-Pro-Complete"
+          path: |
+             out/arch/arm64/boot/Image.gz
+             out/arch/arm64/boot/dts/mediatek/*.dtb
