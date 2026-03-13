@@ -22,36 +22,30 @@ jobs:
           export LOCALVERSION=""
           mkdir -p out
           
-          # 2. MANUAL CONFIG MERGE
-          # We stack the Chipset base and the Ellis fragment manually.
-          cat arch/arm64/configs/k65v1_64_bsp_defconfig \
-              arch/arm64/configs/vendor/ellis_defconfig.config > out/.config
+          # 2. OFFICIAL PATH DEFINITIONS
+          # Motorola MTK 4.19 Protocol:
+          # Base: k65v1_64_bsp_defconfig
+          # Fragment: vendor/ext_config/ellis-default.config
           
-          # 3. APPLY SURGICAL FIXES (The Loop Killers)
-          # We check if scripts/config exists, if not we use a backup method.
-          if [ -f scripts/config ]; then
-            chmod +x scripts/config
-            ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
-            ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE
-            ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
-            ./scripts/config --file out/.config --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
-            ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
-            ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
-            
-            # 4. ENABLE PERIPHERAL DRIVERS
-            ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-            ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
-            ./scripts/config --file out/.config --enable CONFIG_USB_HID
-          else
-            echo "scripts/config missing, using direct injection..."
-            echo "CONFIG_USB_HID=y" >> out/.config
-            echo "CONFIG_USB_CONFIGFS_F_HID=y" >> out/.config
-            echo "CONFIG_HID_GENERIC=y" >> out/.config
-          fi
+          # We use the built-in 'KCONFIG_ALLCONFIG' merge protocol
+          make O=out ARCH=arm64 \
+            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/ext_config/ellis-default.config \
+            k65v1_64_bsp_defconfig
           
-          # 5. RESOLVE & VALIDATE
-          # This takes our custom flags and ensures they are compatible with the hardware.
-          make O=out ARCH=arm64 CC=clang-11 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          # 3. APPLY CUSTOM PERIPHERAL & SECURITY FLAGS
+          {
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_HID_GENERIC=y"
+            echo "CONFIG_USB_HID=y"
+            echo "CONFIG_SECURITY_SELINUX=y"
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
+            echo "# CONFIG_SECURITY_SELINUX_DEVELOP is not set"
+            echo "# CONFIG_MODULE_SIG is not set"
+            echo "# CONFIG_MODVERSIONS is not set"
+          } >> out/.config
+          
+          # Finalize the merged configuration
+          make O=out ARCH=arm64 olddefconfig
 
       - name: Compile Kernel
         run: |
