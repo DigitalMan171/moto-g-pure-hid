@@ -30,12 +30,14 @@ jobs:
           # AOSP Clang r416183b: The Android 12 standard
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes (ECCCI & Modern Toolchain)"
+      - name: "Tier 1: Surgical Fixes (Isolated Guard Method)"
         run: |
           # 1. FIX: mt_cpu_dvfs_id Redefinition (The Error 2 fix)
-          sed -i 's/enum mt_cpu_dvfs_id {/ifndef _MT_CPU_DVFS_ID_\n&/g' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
-          sed -i '/enum mt_cpu_dvfs_id {/i #define _MT_CPU_DVFS_ID_' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
-          sed -i '/};/a #endif' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
+          FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
+          # Wrap the enum start
+          sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
+          # Wrap the enum end specifically to avoid doubling #endif at end of file
+          sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
 
           # 2. FIX: Address Width Mismatches (mrdump/pbm)
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
@@ -102,7 +104,7 @@ jobs:
       - name: "Upload Certified Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Pro-Security-Unlocked"
+          name: "Ellis-Pro-Complete"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
