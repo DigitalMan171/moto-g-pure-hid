@@ -15,25 +15,21 @@ jobs:
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
           sudo apt-get install -y clang-11 lld-11 llvm-11 gcc-aarch64-linux-gnu
 
-      - name: Configure and Patch
+      - name: Motorola Native Build
         run: |
-          # 1. VERSION TRICKING
-          touch .scmversion
-          export LOCALVERSION=""
-          mkdir -p out
+          # 1. PREP THE ENVIRONMENT
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang-11
           
-          # 2. MOTOROLA PROTOCOL: TRIPLE MERGE
-          # We manually stack the files because Motorola's build script is missing.
-          # Base + Motorola Platform + Ellis Hardware
-          cat arch/arm64/configs/k65v1_64_bsp_defconfig \
-              arch/arm64/configs/vendor/moto-consolidate.config \
-              arch/arm64/configs/vendor/ext_config/moto-mt6765-ellis.config > out/ellis_merged.config
+          # 2. RUN THE OFFICIAL MOTO BUILD SCRIPT
+          # This script handles the 'hide and seek' of the defconfigs for us.
+          # We target 'ellis' specifically.
+          chmod +x build.sh
+          ./build.sh ellis
           
-          # 3. NATIVE MERGE (No merge_config.sh needed)
-          # We tell 'make' to use our merged file as the rulebook.
-          make O=out ARCH=arm64 KCONFIG_ALLCONFIG=out/ellis_merged.config alldefconfig
-          
-          # 4. INJECT HID & SECURITY FLAGS
+          # 3. INJECT HID & SECURITY FLAGS INTO THE GENERATED .CONFIG
+          # The build.sh script creates 'out/.config'. We patch it here.
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
@@ -42,21 +38,15 @@ jobs:
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
           } >> out/.config
           
-          # Finalize
-          make O=out ARCH=arm64 olddefconfig
+          # Finalize the manual injections
+          make O=out ARCH=arm64 CC=clang-11 olddefconfig
 
-      - name: Compile Kernel
+      - name: Compile Image
         run: |
+          # Resume the build using the patched config
           make O=out ARCH=arm64 \
           CC=clang-11 \
           LD=ld.lld-11 \
-          AR=llvm-ar-11 \
-          NM=llvm-nm-11 \
-          OBJCOPY=llvm-objcopy-11 \
-          OBJDUMP=llvm-objdump-11 \
-          STRIP=llvm-strip-11 \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=aarch64-linux-gnu- \
           -j$(nproc) Image.gz
 
       - name: Upload Build Artifacts
