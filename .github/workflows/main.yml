@@ -1,6 +1,4 @@
-name: Moto G Pure (MTK) HID Final Build - Unified
-run-name: HID Kernel Build - ${{ github.ref_name }}
-
+name: Ellis Surgical Build - HID Enable
 on:
   workflow_dispatch:
 
@@ -8,88 +6,56 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Kernel Source
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Set up Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi pahole device-tree-compiler
+          sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
+          # Using Clang 11 as identified from your 'getvar' logs
+          sudo apt-get install -y clang-11 lld-11 llvm-11
 
-      - name: Fetch Clang Toolchain
+      - name: Configure and Patch
         run: |
-          git config --global url."https://github.com/".insteadOf git@github.com:
-          git config --global url."https://".insteadOf git://
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
+          # 1. FORCE VERSION MATCHING
+          # This prevents the 'plus sign' (+) from being added to the version string
+          # which causes vendor modules to reject the kernel.
+          touch .scmversion
+          export LOCALVERSION=""
+          
+          # 2. GENERATE BASE CONFIG
+          # Replace 'ellis_defconfig' with your actual defconfig name if different
+          make O=out ARCH=arm64 ellis_defconfig
+          
+          # 3. APPLY SURGICAL FIXES (The Loop Killers)
+          # Disable SELinux Enforcement (Force Permissive)
+          ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX
+          ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE
+          ./scripts/config --file out/.config --disable CONFIG_SECURITY_SELINUX_DEVELOP
+          ./scripts/config --file out/.config --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
+          
+          # Disable Module Signing (Crucial for loading new HID drivers)
+          ./scripts/config --file out/.config --disable CONFIG_MODULE_SIG
+          ./scripts/config --file out/.config --disable CONFIG_MODVERSIONS
+          
+          # 4. ENABLE PERIPHERAL DRIVERS
+          ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
+          ./scripts/config --file out/.config --enable CONFIG_USB_HID
+          
+          make O=out ARCH=arm64 olddefconfig
 
-      - name: Checkout MTK Kernel Source
-        # Note: If this fails with "Username" errors, swap to the 'wget' method we discussed.
+      - name: Compile Kernel
         run: |
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
+          make O=out ARCH=arm64 \
+          CC=clang-11 \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-android- \
+          -j$(nproc) Image.gz
 
-      - name: Build Kernel
-        run: |
-          export PATH=$(pwd)/clang-aosp/bin:$PATH
-          cd kernel-source
-          
-          # --- STAGE 1: SOURCE LOGIC PATCHES (Yesterday's Breakthroughs + Today's Path Fixes) ---
-          
-          # 1. Fuelgauge & Inlining (Yesterday's fixes)
-          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
-          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
-          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
-          
-          # 2. Today's Essential Fixes (Tracer Path & DTC Collision)
-          sed -i 's/#define TRACE_INCLUDE_PATH .$/#define TRACE_INCLUDE_PATH ..\/..\/kernel\/trace/g' kernel/trace/mtk_ftrace.h || true
-          sed -i 's/YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped || true
-          
-          # 3. Motorola TCMD Linker Stubs (The key to linking)
-          echo 'struct moto_chg_tcmd_client;' >> drivers/power/supply/mtk_battery.c
-          echo 'int moto_chg_tcmd_register(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
-          echo 'int moto_chg_tcmd_unregister(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
-
-          # --- STAGE 2: COMPILER ENVIRONMENT & ARCH SYNC ---
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          export CC=clang
-          export HOSTCC=clang
-
-          # --- STAGE 3: CONFIG, HID & SECURITY INJECTION ---
-          mkdir -p out
-          make O=out k65v1_64_bsp_defconfig
-          
-          # Merge Ellis specific config if it exists
-          if [ -f "arch/arm64/configs/ext_config/ellis_defconfig.config" ]; then
-            ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
-          fi
-          
-          # Apply today's Architecture Sync to 'out/.config' to prevent driver crashes
-          sed -i 's/CONFIG_ARM=y/CONFIG_ARM64=y/' out/.config
-          sed -i 's/CONFIG_ARCH_MULTI_V7=y/CONFIG_ARCH_V8A=y/' out/.config
-          
-          # Feature Enablement & Security Lock Fixes
-          ./scripts/config --file out/.config --disable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_HID_GENERIC --enable CONFIG_USB_HID
-          ./scripts/config --file out/.config --enable CONFIG_SECURITY_SELINUX_BOOTPARAM --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0 --disable CONFIG_MODULE_SIG --disable CONFIG_MODVERSIONS
-          
-          make O=out olddefconfig
-
-          # --- STAGE 4: COMPILATION & FUSION ---
-          make O=out KCFLAGS="-w" -j$(nproc) Image.gz dtbs
-
-          # Find and Fuse the Ellis DTB
-          DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          if [ -z "$DTB_FILE" ]; then
-            DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" | head -n 1)
-          fi
-          
-          cat out/arch/arm64/boot/Image.gz "$DTB_FILE" > out/arch/arm64/boot/Image.gz-dtb
-
-      - name: Upload Kernel
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Moto-G-Pure-HID-Master-Build
-          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
+          name: Ellis-Surgical-Kernel
+          path: out/arch/arm64/boot/Image.gz
