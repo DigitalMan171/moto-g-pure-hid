@@ -22,14 +22,19 @@ jobs:
           export LOCALVERSION=""
           mkdir -p out
           
-          # 2. PROTOCOL MERGE
-          # We use the verified paths for the MT6765 Base and Ellis Fragment.
-          # KCONFIG_ALLCONFIG is the official internal tool for merging fragments.
-          make O=out ARCH=arm64 \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/ellis_defconfig.config \
-            k65v1_64_bsp_defconfig
+          # 2. THE OFFICIAL MOTOROLA TRIPLE-MERGE
+          # Protocol: Base (Generic) -> Consolidate (Moto Shared) -> Ellis (Hardware Specific)
+          # We concatenate them into a single fragment to feed to the kernel's native tool
+          cat arch/arm64/configs/vendor/moto-consolidate.config \
+              arch/arm64/configs/vendor/ext_config/moto-mt6765-ellis.config > out/ellis_merged.config
           
-          # 3. APPLY CUSTOM PERIPHERAL & SECURITY FLAGS
+          # 3. GENERATE FINAL CONFIG
+          # We use the generic ARMv8 base and apply our merged Ellis fragment
+          make O=out ARCH=arm64 \
+            KCONFIG_ALLCONFIG=out/ellis_merged.config \
+            genericarmv8-64_defconfig
+          
+          # 4. INJECT HID & SECURITY FIXES
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
@@ -41,7 +46,7 @@ jobs:
             echo "# CONFIG_MODVERSIONS is not set"
           } >> out/.config
           
-          # Finalize the merged configuration
+          # Finalize
           make O=out ARCH=arm64 olddefconfig
 
       - name: Compile Kernel
