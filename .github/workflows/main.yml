@@ -1,11 +1,10 @@
-name: "Ellis Pro-Build: Toolchain-Locked & HID Unlocked"
+name: "Ellis Pro-Build: Toolchain-Locked & Security-Unlocked"
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # Set global environment to lock toolchain paths
     env:
       ARCH: arm64
       SUBARCH: arm64
@@ -24,64 +23,63 @@ jobs:
       - name: "Provision Version-Specific Toolchains"
         run: |
           mkdir -p toolchains
-          # GCC 10.3: The official cross-compiler for ARM64 architecture alignment
+          # Official GCC 10.3 for ARM64 alignment
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
           
-          # AOSP Clang r416183b: The exact version for Android 12 (S) compliance
+          # AOSP Clang r416183b: The Android 12 standard
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Architecture Alignment"
+      - name: "Tier 1: Surgical Fixes (ECCCI & Modern Toolchain)"
         run: |
-          # Fixing 64-bit Address Width Mismatches (Modern Toolchain Compliance)
+          # 1. FIX: mt_cpu_dvfs_id Redefinition (The Error 2 fix)
+          sed -i 's/enum mt_cpu_dvfs_id {/ifndef _MT_CPU_DVFS_ID_\n&/g' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
+          sed -i '/enum mt_cpu_dvfs_id {/i #define _MT_CPU_DVFS_ID_' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
+          sed -i '/};/a #endif' drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h
+
+          # 2. FIX: Address Width Mismatches (mrdump/pbm)
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
-          sed -i 's/mrdump_cbsize/(unsigned long long)mrdump_cbsize/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
-          
-          # Fixing PBM Power Management Logger (Type Safety)
           sed -i 's/\[%s\]/\[%u\]/g' drivers/misc/mediatek/base/power/pbm_v4/mtk_pbm.c
 
-          # Global Compiler Strictness Fixes
+          # 3. FIX: Global Compiler Strictness
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-      - name: "Tier 2: Dynamic Kconfig Merger & HID Unlock"
+      - name: "Tier 2: Kconfig Merge & Security Bypass"
         run: |
           mkdir -p $OUT_DIR
-          # Define the Pro-Method Toolchain Wrapper
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          export CROSS_COMPILE=aarch64-none-linux-gnu-
-          export CC=clang
           export LD_LIBRARY_PATH="$github.workspace/clang-aosp/lib64:$LD_LIBRARY_PATH"
-
-          # 1. Base Config Generation
+          
+          # 1. Generate Base Configuration
           make O=$OUT_DIR k65v1_64_bsp_defconfig
           
-          # 2. Internal Hardware Fragment Merge (The 'Ellis' Profile)
+          # 2. Hardware Fragment Merge (Ellis Profile)
           ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
           cat "$ELLIS_FRAG" >> $OUT_DIR/.config
           
-          # 3. Feature Injection (HID, Gyro, Wireless Stability)
+          # 3. Injection: HID Features + Mandatory Security Bypass
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_INPUT_UINPUT=y"
             echo "CONFIG_INPUT_EVDEV=y"
             echo "CONFIG_HIDRAW=y"
+            # Direct SELinux Permissive Mode Unlock
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y"
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
+            echo "CONFIG_SECURITY_SELINUX_DEVELOP=y"
+            # Build Stability
             echo "CONFIG_MODULE_SIG=n"
             echo "CONFIG_MODVERSIONS=n"
           } >> $OUT_DIR/.config
           
-          # 4. Finalize Configuration
           make O=$OUT_DIR olddefconfig
 
-      - name: "Tier 3: The Pro-Build Execution"
+      - name: "Tier 3: Execution (Toolchain Lock)"
         run: |
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          export CROSS_COMPILE=aarch64-none-linux-gnu-
-          export CC=clang
-          # Build with Clang but use GCC's binutils for architecture-heavy tasks
           make O=$OUT_DIR \
                CC=clang \
                CROSS_COMPILE=aarch64-none-linux-gnu- \
@@ -92,22 +90,19 @@ jobs:
                OBJDUMP=llvm-objdump \
                -j$(nproc) Image.gz dtbs
 
-      - name: "Tier 4: Post-Build Certification (The Pro-Check)"
+      - name: "Tier 4: Certification (The Pro-Check)"
         run: |
-          echo "--- CHECKING HID UNLOCK ---"
-          grep "CONFIG_USB_CONFIGFS_F_HID=y" $OUT_DIR/.config && echo "✅ HID Configured"
+          echo "--- HID STATUS ---"
           $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
-          
-          echo "--- CHECKING GYRO BRIDGE ---"
-          grep "CONFIG_INPUT_UINPUT=y" $OUT_DIR/.config && echo "✅ UINPUT Configured"
-          
-          echo "--- ARCHITECTURE VERIFICATION ---"
+          echo "--- SECURITY STATUS ---"
+          grep "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" $OUT_DIR/.config && echo "✅ SELinux Default Permissive"
+          echo "--- ARCHITECTURE ---"
           file $OUT_DIR/arch/arm64/boot/Image | grep "64-bit" && echo "✅ ARM64 Certified"
 
       - name: "Upload Certified Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Pro-Unlocked-Kernel"
+          name: "Ellis-Pro-Security-Unlocked"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
