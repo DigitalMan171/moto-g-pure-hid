@@ -30,10 +30,12 @@ jobs:
         run: |
           mkdir -p out
           
-          # 1. THE KSML INLINE PATCH (Fixes blk-crypto.c error)
-          # This removes the 'inline' requirement that causes GCC 10.3 to crash
+          # 1. INLINE PATCHES (Fixes GCC 10.3 Strictness)
+          # Fixes blk-crypto.c error
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          echo "✅ Applied KSML Inlining Patch"
+          # Fixes sched/tune.c error
+          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
+          echo "✅ Applied Developer Protocol Inline Patches"
 
           # 2. LAYER MERGE
           BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
