@@ -1,4 +1,4 @@
-name: Ellis Surgical Build - HID Enable
+name: Ellis Surgical Build - FINAL PATH FIX
 on:
   workflow_dispatch:
 
@@ -8,6 +8,8 @@ jobs:
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive' # Ensure we get the vendor/scripts folders
 
       - name: Set up Build Environment
         run: |
@@ -15,21 +17,29 @@ jobs:
           sudo apt-get install -y bc build-essential bison flex libssl-dev libelf-dev python3
           sudo apt-get install -y clang-11 lld-11 llvm-11 gcc-aarch64-linux-gnu
 
-      - name: Motorola Native Build
+      - name: Configure and Build
         run: |
-          # 1. PREP THE ENVIRONMENT
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang-11
+          # 1. FIND THE KERNEL ROOT
+          # Sometimes 'checkout' puts things in a subfolder. We find the Makefile.
+          KERNEL_ROOT=$(find . -name Makefile -exec dirname {} + | head -n 1)
+          cd "$KERNEL_ROOT"
+          echo "Current working directory is: $(pwd)"
           
-          # 2. RUN THE OFFICIAL MOTO BUILD SCRIPT
-          # This script handles the 'hide and seek' of the defconfigs for us.
-          # We target 'ellis' specifically.
-          chmod +x build.sh
-          ./build.sh ellis
+          # 2. FIND THE CONFIG
+          # We look for ANY ellis config or use the 'running.config' we saved.
+          REAL_CONFIG=$(find . -name "*ellis_defconfig*" -o -name "running.config" | head -n 1)
           
-          # 3. INJECT HID & SECURITY FLAGS INTO THE GENERATED .CONFIG
-          # The build.sh script creates 'out/.config'. We patch it here.
+          if [ -z "$REAL_CONFIG" ]; then
+            echo "STILL NO CONFIG FOUND. Listing files for manual review:"
+            ls -R | grep "defconfig" | head -n 20
+            exit 1
+          fi
+          
+          # 3. PREP & MERGE
+          mkdir -p out
+          cp "$REAL_CONFIG" out/.config
+          
+          # 4. INJECT HID DRIVERS (The Goal)
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
@@ -37,20 +47,13 @@ jobs:
             echo "CONFIG_SECURITY_SELINUX=y"
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
           } >> out/.config
-          
-          # Finalize the manual injections
-          make O=out ARCH=arm64 CC=clang-11 olddefconfig
 
-      - name: Compile Image
-        run: |
-          # Resume the build using the patched config
-          make O=out ARCH=arm64 \
-          CC=clang-11 \
-          LD=ld.lld-11 \
-          -j$(nproc) Image.gz
+          # 5. COMPILE
+          make O=out ARCH=arm64 CC=clang-11 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make O=out ARCH=arm64 CC=clang-11 LD=ld.lld-11 -j$(nproc) Image.gz
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Ellis-Surgical-Kernel
-          path: out/arch/arm64/boot/Image.gz
+          path: "**/out/arch/arm64/boot/Image.gz"
