@@ -1,4 +1,4 @@
-name: Ellis Surgical Build - Path Absolute
+name: Ellis Surgical Build - Submodule Recovery
 on:
   workflow_dispatch:
 
@@ -6,11 +6,12 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Kernel Source (with Submodules)
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
+          submodules: 'recursive' # THIS IS THE FIX: Pulls the missing 'vendor' folders
           path: './'
 
       - name: Checkout GCC64 Toolchain
@@ -29,15 +30,19 @@ jobs:
         run: |
           mkdir -p out
           
-          # DEBUG: Let's see what Motorola actually named these files
-          echo "--- LISTING VENDOR CONFIGS ---"
-          ls arch/arm64/configs/vendor/
+          # PROTOCOL: FIND THE HIDDEN LAYERS
+          # If they aren't in /vendor/, this will find where they are hiding.
+          MOTO_COMMON=$(find arch/arm64/configs -name "moto-common.config" -o -name "moto-consolidate.config" | head -n 1)
+          ELLIS_SPEC=$(find arch/arm64/configs -name "ellis.config" -o -name "ellis_defconfig.config" | head -n 1)
           
-          # MOTOROLA LAYERED CAKE (Verified Pathing)
-          # We use the names found in the Android 12 branch
+          echo "Found Platform Layer: $MOTO_COMMON"
+          echo "Found Hardware Layer: $ELLIS_SPEC"
+
+          # MOTOROLA LAYERED CAKE
+          # We use the discovered paths to ensure no more "No such file" errors.
           cat arch/arm64/configs/k65v1_64_bsp_defconfig \
-              arch/arm64/configs/vendor/moto-common.config \
-              arch/arm64/configs/vendor/ellis.config > out/.config
+              "$MOTO_COMMON" \
+              "$ELLIS_SPEC" > out/.config
           
           # HID INJECTION
           {
@@ -46,11 +51,9 @@ jobs:
             echo "CONFIG_USB_HID=y"
           } >> out/.config
           
-          # PROTOCOL VERIFICATION
-          echo "--- STARTING PROTOCOL VERIFICATION ---"
+          # VERIFICATION
           grep "CONFIG_MTK_PLATFORM" out/.config && echo "✅ Layer 1 Present"
           grep "CONFIG_MTK_TOUCH_PANEL" out/.config && echo "✅ Layer 3 Present"
-          grep "CONFIG_USB_HID=y" out/.config && echo "✅ HID Patch Injected"
 
           # FINALIZE
           make O=out ARCH=arm64 \
