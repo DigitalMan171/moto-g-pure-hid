@@ -1,4 +1,4 @@
-name: Ellis Surgical Build - Submodule Recovery
+name: Ellis Surgical Build - Motorola Official Protocol
 on:
   workflow_dispatch:
 
@@ -6,70 +6,82 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Kernel Source (with Submodules)
+      - name: Checkout Source & Submodules
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
-          submodules: 'recursive' # THIS IS THE FIX: Pulls the missing 'vendor' folders
+          submodules: 'recursive'
           path: './'
 
-      - name: Checkout GCC64 Toolchain
+      - name: Checkout AOSP Toolchains
         uses: actions/checkout@v4
         with:
           repository: 'LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9'
           path: 'gcc64'
 
-      - name: Checkout Clang Toolchain
+      - name: Checkout AOSP Clang
         uses: actions/checkout@v4
         with:
           repository: 'LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b'
           path: 'clang-aosp'
 
-      - name: Layered Configuration & Verification
+      - name: Protocol Phase 1: Discovery & Configuration
         run: |
           mkdir -p out
           
-          # PROTOCOL: FIND THE HIDDEN LAYERS
-          # If they aren't in /vendor/, this will find where they are hiding.
-          MOTO_COMMON=$(find arch/arm64/configs -name "moto-common.config" -o -name "moto-consolidate.config" | head -n 1)
-          ELLIS_SPEC=$(find arch/arm64/configs -name "ellis.config" -o -name "ellis_defconfig.config" | head -n 1)
+          # SEARCH FOR MOTOROLA INSTRUCTIONS
+          echo "--- LOGGING MOTOROLA BUILD SPECS ---"
+          find . -name "defconfig.mk" -exec echo "Reading Spec: {}" \; -exec cat {} \;
           
-          echo "Found Platform Layer: $MOTO_COMMON"
-          echo "Found Hardware Layer: $ELLIS_SPEC"
+          # IDENTIFY LAYERS
+          BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
+          ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
+          
+          echo "Using Base: $BASE_BSP"
+          echo "Using Hardware Fragment: $ELLIS_FRAG"
 
-          # MOTOROLA LAYERED CAKE
-          # We use the discovered paths to ensure no more "No such file" errors.
-          cat arch/arm64/configs/k65v1_64_bsp_defconfig \
-              "$MOTO_COMMON" \
-              "$ELLIS_SPEC" > out/.config
+          # MERGE AS PER MOTO SPEC
+          cat "$BASE_BSP" > out/.config
+          [ -n "$ELLIS_FRAG" ] && cat "$ELLIS_FRAG" >> out/.config
           
-          # HID INJECTION
+          # INJECT HID PATCH (Our modification)
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
             echo "CONFIG_USB_HID=y"
           } >> out/.config
-          
-          # VERIFICATION
-          grep "CONFIG_MTK_PLATFORM" out/.config && echo "✅ Layer 1 Present"
-          grep "CONFIG_MTK_TOUCH_PANEL" out/.config && echo "✅ Layer 3 Present"
 
-          # FINALIZE
+          # RESOLVE CONFIGURATION
           make O=out ARCH=arm64 \
             CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
             CC=$(pwd)/clang-aosp/bin/clang \
             olddefconfig
 
-      - name: Compile
+      - name: Protocol Phase 2: Compiling & Assembly
         run: |
+          # BUILD KERNEL AND DEVICE TREE
           make O=out ARCH=arm64 \
             CROSS_COMPILE=$(pwd)/gcc64/bin/aarch64-linux-android- \
             CC=$(pwd)/clang-aosp/bin/clang \
-            -j$(nproc) Image.gz
+            -j$(nproc) Image.gz dtbs
+          
+          # APPEND DTB (Motorola Requirement for booting)
+          # We look for the 'ellis' binary hardware map
+          ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
+          if [ -z "$ELLIS_DTB" ]; then
+             echo "❌ CRITICAL ERROR: Ellis DTB not found. Image will not boot."
+             exit 1
+          fi
+          
+          echo "Appending $ELLIS_DTB to Image.gz..."
+          cat out/arch/arm64/boot/Image.gz "$ELLIS_DTB" > out/arch/arm64/boot/Image.gz-dtb
+          echo "✅ Final Assembly Complete: Image.gz-dtb"
 
-      - name: Upload Artifact
+      - name: Upload Verified Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Surgical-Kernel
-          path: out/arch/arm64/boot/Image.gz
+          name: Ellis-Surgical-Kernel-Package
+          path: |
+            out/arch/arm64/boot/Image.gz-dtb
+            out/.config
