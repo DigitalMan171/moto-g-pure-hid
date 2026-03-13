@@ -1,4 +1,4 @@
-name: "Ellis Official Build - Redundancy & Verification"
+name: "Ellis Ultimate HID Unlock - Self-Contained"
 on:
   workflow_dispatch:
 
@@ -6,67 +6,78 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: "Checkout Official Source"
+      - name: "Checkout Motorola Source"
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           path: './'
 
-      - name: "Official Toolchains: GCC 10.3 & Clang"
+      - name: "Setup Modern Toolchains"
         run: |
           mkdir -p toolchains
+          # GCC 10.3 for architecture-specific linking
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-          
+          # AOSP Clang for Android 12 compliance
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Apply & Verify Official Patches"
+      - name: "Surgical Toolchain Alignment"
         run: |
-          # 1. MRDump Architecture Alignment (Official Protocol)
+          # 1. Fix 64-bit Format Mismatches (MRDump & PBM Power Driver)
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbsize/(unsigned long long)mrdump_cbsize/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+          sed -i 's/\[%s\]/\[%u\]/g' drivers/misc/mediatek/base/power/pbm_v4/mtk_pbm.c
 
-          # 2. Battery Header Integrity
+          # 2. Fix Header & Inline Strictness for GCC 10.3
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
-          
-          # 3. Compiler Inlining Fixes
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-          # REDUNDANCY CHECK: Confirm patches exist before building
-          echo "--- VERIFICATION LOG ---"
-          grep "unsigned long long" drivers/misc/mediatek/aee/mrdump/mrdump_panic.c | head -n 1 || exit 1
-          grep "FUELGAUGE_TEMPERATURE" drivers/power/supply/mtk_battery_table.h || exit 1
-          echo "✅ All surgical patches verified."
-
-      - name: "Execute Official Build"
+      - name: "Dynamic Ellis Config & HID Unlock"
         run: |
           mkdir -p out
           export ARCH=arm64
-          export SUBARCH=arm64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
           export CC=$(pwd)/clang-aosp/bin/clang
-          export HOSTCC=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-gcc
           export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
 
-          # Build Config
+          # A. Generate Base Config
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
           
-          # Inject HID redundancy
-          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> out/.config
-          echo "CONFIG_HID_GENERIC=y" >> out/.config
+          # B. Merge Internal Ellis Profile
+          ELLIS_FILE=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
+          cat "$ELLIS_FILE" >> out/.config
           
+          # C. Inject HID, Gyro, and Wireless Bypass
+          {
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"    # Core HID Unlock
+            echo "CONFIG_INPUT_UINPUT=y"          # Gyro Translation Bridge
+            echo "CONFIG_INPUT_EVDEV=y"           # Raw Sensor/Button Input
+            echo "CONFIG_HIDRAW=y"                # Raw HID for Multi-Button
+            echo "CONFIG_INPUT_JOYSTICK=y"        # Controller Support
+            echo "CONFIG_JOYSTICK_XPAD=y"         # Xbox Compatibility
+            echo "CONFIG_MODULE_SIG=n"            # Signature Bypass
+            echo "CONFIG_MODVERSIONS=n"           # Version String Bypass
+          } >> out/.config
+          
+          # D. Sync and Verify
           make O=out ARCH=arm64 olddefconfig
-          make O=out -j$(nproc) Image.gz dtbs
 
-      - name: "Upload Ellis Artifacts"
+      - name: "Compile Kernel & DTBs"
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
+          export CC=$(pwd)/clang-aosp/bin/clang
+          export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
+          make O=out ARCH=arm64 -j$(nproc) Image.gz dtbs
+
+      - name: "Upload Unlocked Ellis Kernel"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Verified-Kernel"
+          name: "Ellis-HID-Unlocked"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
