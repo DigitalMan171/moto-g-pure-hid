@@ -45,7 +45,7 @@ jobs:
           find drivers/misc/mediatek/emi -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat/$MTK_PLATFORM|g" {} +
           find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
 
-          # 4. FIX: Global Compiler Strictness
+          # 4. FIX: Architecture & Compiler Strictness
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
@@ -73,9 +73,18 @@ jobs:
       - name: "Tier 3: Execution (The 'Immunized' Build Stage)"
         run: |
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          # -fcommon: Allows merging of global variables (fixes the Error 2 archive crash)
-          # -Wno-error=unused-function: Bypasses the video driver warnings seen in line 4512
-          export KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP -Wno-error=pointer-to-int-cast -Wno-error=int-to-pointer-cast -Wno-error=implicit-function-declaration -Wno-error=unused-function -fcommon"
+          
+          # KCFLAGS REFINEMENT:
+          # -fcommon: Merges global variables to prevent Linker Error 2.
+          # -Wno-error=declaration-after-statement: Bypasses ISO C90 errors (ddp_dsi.c).
+          # -Wno-error=unused-variable/function: Clears video driver noise.
+          # -fno-pie: Ensures static kernel linking for Image.gz.
+          
+          export KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP \
+                          -Wno-error=pointer-to-int-cast -Wno-error=int-to-pointer-cast \
+                          -Wno-error=implicit-function-declaration -Wno-error=unused-function \
+                          -Wno-error=unused-variable -Wno-error=declaration-after-statement \
+                          -fcommon -fno-pie"
           
           make O=$OUT_DIR \
                CC=clang \
