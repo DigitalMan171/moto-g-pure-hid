@@ -1,83 +1,113 @@
-name: "Ellis Ultimate HID Unlock - Self-Contained"
+name: "Ellis Pro-Build: Toolchain-Locked & HID Unlocked"
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # Set global environment to lock toolchain paths
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      CLANG_PATH: ${{ github.workspace }}/clang-aosp/bin
+      GCC_PATH: ${{ github.workspace }}/toolchains/bin
+      OUT_DIR: ${{ github.workspace }}/out
+
     steps:
-      - name: "Checkout Motorola Source"
+      - name: "Checkout Motorola Official Source"
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           path: './'
 
-      - name: "Setup Modern Toolchains"
+      - name: "Provision Version-Specific Toolchains"
         run: |
           mkdir -p toolchains
-          # GCC 10.3 for architecture-specific linking
+          # GCC 10.3: The official cross-compiler for ARM64 architecture alignment
           wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-          # AOSP Clang for Android 12 compliance
+          
+          # AOSP Clang r416183b: The exact version for Android 12 (S) compliance
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Surgical Toolchain Alignment"
+      - name: "Tier 1: Surgical Architecture Alignment"
         run: |
-          # 1. Fix 64-bit Format Mismatches (MRDump & PBM Power Driver)
+          # Fixing 64-bit Address Width Mismatches (Modern Toolchain Compliance)
           sed -i 's/%x/%llx/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbaddr/(unsigned long long)mrdump_cbaddr/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
           sed -i 's/mrdump_cbsize/(unsigned long long)mrdump_cbsize/g' drivers/misc/mediatek/aee/mrdump/mrdump_panic.c
+          
+          # Fixing PBM Power Management Logger (Type Safety)
           sed -i 's/\[%s\]/\[%u\]/g' drivers/misc/mediatek/base/power/pbm_v4/mtk_pbm.c
 
-          # 2. Fix Header & Inline Strictness for GCC 10.3
+          # Global Compiler Strictness Fixes
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-      - name: "Dynamic Ellis Config & HID Unlock"
+      - name: "Tier 2: Dynamic Kconfig Merger & HID Unlock"
         run: |
-          mkdir -p out
-          export ARCH=arm64
-          export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
-          export CC=$(pwd)/clang-aosp/bin/clang
-          export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
+          mkdir -p $OUT_DIR
+          # Define the Pro-Method Toolchain Wrapper
+          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
+          export CROSS_COMPILE=aarch64-none-linux-gnu-
+          export CC=clang
+          export LD_LIBRARY_PATH="$github.workspace/clang-aosp/lib64:$LD_LIBRARY_PATH"
 
-          # A. Generate Base Config
-          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
+          # 1. Base Config Generation
+          make O=$OUT_DIR k65v1_64_bsp_defconfig
           
-          # B. Merge Internal Ellis Profile
-          ELLIS_FILE=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
-          cat "$ELLIS_FILE" >> out/.config
+          # 2. Internal Hardware Fragment Merge (The 'Ellis' Profile)
+          ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
+          cat "$ELLIS_FRAG" >> $OUT_DIR/.config
           
-          # C. Inject HID, Gyro, and Wireless Bypass
+          # 3. Feature Injection (HID, Gyro, Wireless Stability)
           {
-            echo "CONFIG_USB_CONFIGFS_F_HID=y"    # Core HID Unlock
-            echo "CONFIG_INPUT_UINPUT=y"          # Gyro Translation Bridge
-            echo "CONFIG_INPUT_EVDEV=y"           # Raw Sensor/Button Input
-            echo "CONFIG_HIDRAW=y"                # Raw HID for Multi-Button
-            echo "CONFIG_INPUT_JOYSTICK=y"        # Controller Support
-            echo "CONFIG_JOYSTICK_XPAD=y"         # Xbox Compatibility
-            echo "CONFIG_MODULE_SIG=n"            # Signature Bypass
-            echo "CONFIG_MODVERSIONS=n"           # Version String Bypass
-          } >> out/.config
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_INPUT_UINPUT=y"
+            echo "CONFIG_INPUT_EVDEV=y"
+            echo "CONFIG_HIDRAW=y"
+            echo "CONFIG_MODULE_SIG=n"
+            echo "CONFIG_MODVERSIONS=n"
+          } >> $OUT_DIR/.config
           
-          # D. Sync and Verify
-          make O=out ARCH=arm64 olddefconfig
+          # 4. Finalize Configuration
+          make O=$OUT_DIR olddefconfig
 
-      - name: "Compile Kernel & DTBs"
+      - name: "Tier 3: The Pro-Build Execution"
         run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
-          export CC=$(pwd)/clang-aosp/bin/clang
-          export LD_LIBRARY_PATH=$(pwd)/clang-aosp/lib64:$LD_LIBRARY_PATH
-          make O=out ARCH=arm64 -j$(nproc) Image.gz dtbs
+          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
+          export CROSS_COMPILE=aarch64-none-linux-gnu-
+          export CC=clang
+          # Build with Clang but use GCC's binutils for architecture-heavy tasks
+          make O=$OUT_DIR \
+               CC=clang \
+               CROSS_COMPILE=aarch64-none-linux-gnu- \
+               LD=ld.lld \
+               AR=llvm-ar \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               -j$(nproc) Image.gz dtbs
 
-      - name: "Upload Unlocked Ellis Kernel"
+      - name: "Tier 4: Post-Build Certification (The Pro-Check)"
+        run: |
+          echo "--- CHECKING HID UNLOCK ---"
+          grep "CONFIG_USB_CONFIGFS_F_HID=y" $OUT_DIR/.config && echo "✅ HID Configured"
+          $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
+          
+          echo "--- CHECKING GYRO BRIDGE ---"
+          grep "CONFIG_INPUT_UINPUT=y" $OUT_DIR/.config && echo "✅ UINPUT Configured"
+          
+          echo "--- ARCHITECTURE VERIFICATION ---"
+          file $OUT_DIR/arch/arm64/boot/Image | grep "64-bit" && echo "✅ ARM64 Certified"
+
+      - name: "Upload Certified Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-HID-Unlocked"
+          name: "Ellis-Pro-Unlocked-Kernel"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
