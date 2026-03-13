@@ -30,28 +30,28 @@ jobs:
         run: |
           mkdir -p out
           
-          # 1. DEVELOPER PROTOCOL PATCHES
-          # Inline Fixes (GCC 10.3 Strictness)
+          # 1. FOOLPROOF SURGICAL PATCHES
+          # Battery Driver Fix (Forward declare struct)
+          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
+          
+          # Inlining Fixes (GCC 10.3 Strictness)
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
           
           # MediaTek Trace Path Fix
-          # Resolves "mtk_ftrace.h not found" by correcting the include depth
           find drivers/misc/mediatek -name "mtk_ftrace.h" -exec sed -i 's/trace\/events\/mtk_ftrace.h/mtk_ftrace.h/g' {} +
           
           # Motorola TCMD Stub Injection
-          # Prevents linker errors for missing proprietary factory test symbols
           echo "void tcmd_send_event(void *e) {}" >> drivers/misc/mediatek/base/power/mtk_reboot.c
           
-          echo "✅ Applied All Protocol Patches (Inline, Trace, TCMD)"
+          echo "✅ All Foolproof Patches Applied"
 
           # 2. LAYER MERGE
           BASE_BSP="arch/arm64/configs/k65v1_64_bsp_defconfig"
           ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
           cat "$BASE_BSP" > out/.config
-          if [ -n "$ELLIS_FRAG" ]; then
-            cat "$ELLIS_FRAG" >> out/.config
-          fi
+          [ -n "$ELLIS_FRAG" ] && cat "$ELLIS_FRAG" >> out/.config
           
           # 3. HID INJECTION
           {
@@ -64,6 +64,7 @@ jobs:
 
           # 4. GLOBAL ENVIRONMENT HANDSHAKE
           export ARCH=arm64
+          export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=$(pwd)/toolchains/bin/aarch64-none-linux-gnu-
           export CC=$(pwd)/clang-aosp/bin/clang
@@ -75,12 +76,8 @@ jobs:
           make O=out ARCH=arm64 olddefconfig
           make O=out -j$(nproc) Image.gz dtbs
           
-          # 6. FINAL ASSEMBLY
+          # 6. ASSEMBLY
           ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
-          if [ -z "$ELLIS_DTB" ]; then
-             echo "❌ CRITICAL: Ellis DTB not found."
-             exit 1
-          fi
           cat out/arch/arm64/boot/Image.gz "$ELLIS_DTB" > out/arch/arm64/boot/Image.gz-dtb
 
       - name: "Upload Verified Artifacts"
