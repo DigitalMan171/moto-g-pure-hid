@@ -53,3 +53,49 @@ jobs:
 
       - name: "Tier 2: Kconfig Merge & Security Bypass"
         run: |
+          mkdir -p $OUT_DIR
+          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
+          export LD_LIBRARY_PATH="$github.workspace/clang-aosp/lib64:$LD_LIBRARY_PATH"
+          make O=$OUT_DIR k65v1_64_bsp_defconfig
+          ELLIS_FRAG=$(find arch/arm64/configs -name "ellis_defconfig.config" | head -n 1)
+          cat "$ELLIS_FRAG" >> $OUT_DIR/.config
+          {
+            echo "CONFIG_USB_CONFIGFS_F_HID=y"
+            echo "CONFIG_INPUT_UINPUT=y"
+            echo "CONFIG_INPUT_EVDEV=y"
+            echo "CONFIG_HIDRAW=y"
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y"
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0"
+            echo "CONFIG_SECURITY_SELINUX_DEVELOP=y"
+            echo "CONFIG_MODULE_SIG=n"
+            echo "CONFIG_MODVERSIONS=n"
+          } >> $OUT_DIR/.config
+          make O=$OUT_DIR olddefconfig
+
+      - name: "Tier 3: Execution (Toolchain Lock)"
+        run: |
+          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
+          make O=$OUT_DIR \
+               CC=clang \
+               CROSS_COMPILE=aarch64-none-linux-gnu- \
+               LD=ld.lld \
+               AR=llvm-ar \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               -j$(nproc) Image.gz dtbs
+
+      - name: "Tier 4: Certification (The Pro-Check)"
+        run: |
+          echo "--- HID STATUS ---"
+          $GCC_PATH/aarch64-none-linux-gnu-nm $OUT_DIR/vmlinux | grep -i "f_hid" && echo "✅ HID Binary Linked"
+          echo "--- SECURITY STATUS ---"
+          grep "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=0" $OUT_DIR/.config && echo "✅ SELinux Default Permissive"
+
+      - name: "Upload Certified Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "Ellis-Pro-Complete"
+          path: |
+             out/arch/arm64/boot/Image.gz
+             out/arch/arm64/boot/dts/mediatek/*.dtb
