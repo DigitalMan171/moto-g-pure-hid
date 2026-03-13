@@ -47,7 +47,7 @@ jobs:
             echo "✅ Ellis hardware layer merged."
           fi
           
-          # INJECT HID PATCH
+          # INJECT HID PATCH (The Project Goal)
           {
             echo "CONFIG_USB_CONFIGFS_F_HID=y"
             echo "CONFIG_HID_GENERIC=y"
@@ -69,6 +69,7 @@ jobs:
             -j$(nproc) Image.gz dtbs
           
           # APPEND DTB (Motorola Assembly Requirement)
+          # This creates the final bootable binary
           ELLIS_DTB=$(find out/arch/arm64/boot/dts -name "*ellis*.dtb" | head -n 1)
           if [ -z "$ELLIS_DTB" ]; then
              echo "❌ CRITICAL ERROR: Ellis DTB not found."
