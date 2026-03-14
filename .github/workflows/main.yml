@@ -1,16 +1,15 @@
-name: "Ellis: Golden Build Protocol V2.2"
+name: "Ellis: Golden Build Protocol V2.7"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Environment Setup (Ghost Purged)
+      - name: 📦 Environment Setup
         run: |
           sudo apt-get update
           echo "deb http://security.ubuntu.com/ubuntu jammy-security main universe" | sudo tee /etc/apt/sources.list.d/jammy-security.list
           sudo apt-get update
-          # Swapped "electronics-tools" for actual kernel build requirements: libelf-dev & dwarves
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
 
       - name: 🌐 Clone Source & Toolchains
@@ -24,12 +23,15 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Full Ellis Answer Sheet)
+      - name: 🛡️ The Master Conversation (Hardware & Path Answers)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
+          
+          # Repair the relative path Ghost for the imaging drivers
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1/../g' {} +
           
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
@@ -43,18 +45,17 @@ jobs:
             --enable CONFIG_MTK_AUTO_DETECT_ACCELEROMETER \
             --enable CONFIG_MTK_BMI160_I2C \
             --enable CONFIG_VIDEO_MEDIATEK_V4L2 \
-            --enable CONFIG_VIDEO_S5K4H7 \
-            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw" \
             --enable CONFIG_MTK_MMSYS \
             --enable CONFIG_MTK_IOMMU \
-            --enable CONFIG_TRUSTY \
             --enable CONFIG_MTK_CMDQ \
+            --enable CONFIG_TRUSTY \
             --enable CONFIG_TOUCH_INTERFACE \
             --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
             --enable CONFIG_FINGERPRINT_GOODIX \
             --enable CONFIG_MTK_ROUND_CORNER \
             --set-val CONFIG_MTK_GAUGE_VERSION 30 \
             --set-val CONFIG_MTK_COMPOSITE_VER 2 \
+            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e9_mipi_raw" \
             --disable CONFIG_MTK_ACCEL_LIS2HH12 \
             --disable CONFIG_TOUCHSCREEN_HIMAX_INCELL \
             --disable CONFIG_USB_G_ANDROID \
@@ -86,5 +87,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-Kernel-V2.2
+          name: Ellis-Final-Kernel-V2.7
           path: source/out/arch/arm64/boot/Image.gz
