@@ -1,89 +1,54 @@
-name: "Ellis Pro-Build: Surgical Makefile Standard"
+name: Moto G Pure Kernel Build (USB-HID)
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    env:
-      ARCH: arm64
-      SUBARCH: arm64
-      CLANG_PATH: ${{ github.workspace }}/clang-aosp/bin
-      GCC_PATH: ${{ github.workspace }}/toolchains/bin
-      OUT_DIR: ${{ github.workspace }}/out
+    runs-on: ubuntu-latest
 
     steps:
-      - name: "Checkout Motorola Official Source"
-        uses: actions/checkout@v4
-        with:
-          repository: 'MotorolaMobilityLLC/kernel-mtk'
-          ref: 'android-12-release-s3rhs32.20-42-10-4-11'
-          path: './'
+    - name: Checkout Kernel Source
+      uses: actions/checkout@v4
 
-      - name: "Provision Version-Specific Toolchains"
-        run: |
-          mkdir -p toolchains
-          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
-          tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
+    - name: Set Up Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
 
-      - name: "Tier 1: Surgical Makefile Patches"
-        run: |
-          # 1. TARGETED FLAG INJECTION: 
-          # We append flags directly to KBUILD_CFLAGS in the Makefile. 
-          # This ensures they only apply to the phone's kernel code, not build tools.
-          sed -i '/KBUILD_CFLAGS   :=/ s/$/ -fcommon -Wno-return-type -Wno-implicit-function-declaration -Wno-unused-variable -Wno-unused-function/' Makefile
-          
-          # 2. DISABLE WERROR: Prevents minor vendor code warnings from breaking the build.
-          sed -i 's/-Werror//g' Makefile
+    - name: Fetch Toolchains
+      run: |
+        mkdir toolchains
+        cd toolchains
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+        echo "TOOLCHAIN_64=$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_ENV
+        echo "TOOLCHAIN_32=$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_ENV
 
-          # 3. SYMBOL RENAMING: Prevents vendor 'hidg_' symbols from clashing with standard Linux HID.
-          find drivers/misc/mediatek -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/hidg_/mtk_hidg_/g' {} +
+    - name: Configure HID Flags
+      run: |
+        # Using scripts/config to ensure proper syntax and avoid conflicts
+        ARCH=arm64 scripts/config --file arch/arm64/configs/ellis_defconfig \
+          -e CONFIG_USB_G_HID \
+          -e CONFIG_USB_CONFIGFS_F_HID \
+          -e CONFIG_USB_F_HID \
+          -e CONFIG_INPUT_UINPUT \
+          -e CONFIG_HIDRAW \
+          -e CONFIG_HID_GENERIC
 
-          # 4. FIX: CPUFreq Header Guards
-          FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
-          sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
-          sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
+    - name: Compile Kernel
+      run: |
+        export PATH="$TOOLCHAIN_64:$TOOLCHAIN_32:$PATH"
+        make O=out ARCH=arm64 ellis_defconfig
+        make -j$(nproc --all) O=out \
+          ARCH=arm64 \
+          CROSS_COMPILE=aarch64-linux-android- \
+          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CC=clang
 
-      - name: "Tier 2: Kconfig 'Standard' Preparation"
-        run: |
-          mkdir -p $OUT_DIR
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          make O=$OUT_DIR k65v1_64_bsp_defconfig
-          
-          # Fix the Himax conflict to prevent the interactive config loop
-          sed -i 's/CONFIG_TOUCHSCREEN_HIMAX_INCELL=y/CONFIG_TOUCHSCREEN_HIMAX_INCELL=n/' $OUT_DIR/.config
-          
-          # USB Standard Config for HID/Xbox support
-          ./scripts/config --file $OUT_DIR/.config -d USB_G_ANDROID
-          ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS
-          ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS_F_HID
-          ./scripts/config --file $OUT_DIR/.config -e HIDRAW
-          
-          # Security bypass for easier peripheral development
-          ./scripts/config --file $OUT_DIR/.config -d SECURITY_SELINUX
-          ./scripts/config --file $OUT_DIR/.config --set-val SECURITY_SELINUX_BOOTPARAM_VALUE 0
-          
-          # Auto-confirm dependency questions (LTO, ASLR, etc.)
-          yes "" | make O=$OUT_DIR olddefconfig
-
-      - name: "Tier 3: Execution (The Clean Environment Build)"
-        run: |
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          
-          # No KCFLAGS exported here. The Makefile now handles the logic internally.
-          # This avoids the 'unknown argument' errors in the scripts phase.
-          make O=$OUT_DIR \
-               CC=clang \
-               CROSS_COMPILE=aarch64-none-linux-gnu- \
-               LD=ld.lld \
-               KBUILD_LDFLAGS="--allow-multiple-definition" \
-               -j$(nproc) Image.gz dtbs
-
-      - name: "Upload Certified Artifacts"
-        uses: actions/upload-artifact@v4
-        with:
-          name: "Ellis-Pro-Complete"
-          path: |
-             out/arch/arm64/boot/Image.gz
-             out/arch/arm64/boot/dts/mediatek/*.dtb
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MotoGPure-Kernel-HID
+        path: out/arch/arm64/boot/Image.gz-dtb
