@@ -1,4 +1,4 @@
-name: "Ellis: Master Hardware Protocol V4.5"
+name: "Ellis: Master Hardware Protocol V4.6"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -16,11 +16,16 @@ jobs:
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
+          
+          # Download and Extract GCC 64-bit
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
-          mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu gcc64
+          mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
+          
+          # Download and Extract GCC 32-bit (Using wildcards to prevent 'No such file' errors)
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
-          tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
+          tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
+          mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
       - name: 🛡️ The Master Handshake (Symlink & Config)
         working-directory: source
@@ -31,7 +36,6 @@ jobs:
           
           # THE CRITICAL SYMLINK FIX
           # We create a link named 'v1' that points to the 'v1_1' source
-          # This satisfies the Makefile's ../common/v1/ pathing error
           cd drivers/misc/mediatek/imgsensor/src/common/
           ln -sf v1_1 v1
           cd ../../../../../
@@ -39,7 +43,7 @@ jobs:
           # Global Infrastructure Fixes
           echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
 
-          # Configure Hardware Context (USB, Camera, Touch, Fingerprint)
+          # Configure Hardware Context
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -72,7 +76,6 @@ jobs:
           export CC=clang
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           
-          # Official MTK Build Variables
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
@@ -82,5 +85,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V4.5
+          name: Ellis-Kernel-V4.6
           path: source/out/arch/arm64/boot/Image.gz
