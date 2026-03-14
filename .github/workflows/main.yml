@@ -1,4 +1,4 @@
-name: "Ellis: Total Recall Protocol"
+name: "Ellis: True Master Protocol"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -18,32 +18,35 @@ jobs:
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: 🧪 Surgical Ledger (Restoring All Verified Fixes)
+      - name: 🧪 Surgical Ledger (Verified Ellis Fixes)
         run: |
-          # 1. Battery Table Definition (The error you just hit)
-          # Injects the missing struct definition at the top of the battery table header
-          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
+          # 1. Battery Driver: Case Sensitivity & Incomplete Type Fix
+          # We define the struct AND create a typedef to bridge the Case-Mismatch gap
+          sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
+          sed -i '2i typedef struct fuelgauge_temperature FUELGAUGE_TEMPERATURE;' drivers/power/supply/mtk_battery_table.h
 
-          # 2. CPUFreq Guard (Fixes mt_cpu_dvfs_id redefinition)
+          # 2. ECCCI Pointer Cast Fix (64-bit portability)
+          # Fixes: cast to smaller integer type 'u32' from 'u64 *'
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(unsigned long)data_64ptr/g' {} +
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(unsigned long)data_8ptr/g' {} +
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_ptr/(unsigned long)data_ptr/g' {} +
+
+          # 3. CPUFreq Guard (Redefinition Fix)
           sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           echo "#endif" >> include/linux/cpufreq.h
 
-          # 3. Universal Visibility Injection (ECCCI/CCCI/Sensors/Video)
-          # This forces the build to find the mt6765 platform headers
+          # 4. Universal Visibility Injection
           PLAT_PATH=$(find drivers/misc/mediatek/include/mt-plat -name "mt6765" -type d | head -n 1)
           FOR_FIX="drivers/misc/mediatek/eccci drivers/misc/mediatek/ccci_util drivers/misc/mediatek/sensors-1.0 drivers/misc/mediatek/video"
           for dir in $FOR_FIX; do
-            if [ -d "$dir" ]; then
-              find $dir -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat -I\$(srctree)/$PLAT_PATH/include/mach|g" {} +
-            fi
+            find $dir -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat -I\$(srctree)/$PLAT_PATH/include/mach|g" {} +
           done
 
-          # 4. Pointer Alignment (mrdump 64-bit Fix)
+          # 5. Pointer Alignment (mrdump Fix)
           find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
           
-          # 5. Compiler Strictness (Inline to Static)
-          # Prevents "conflicting types" and "redefined" errors
+          # 6. Scheduler & KSM Inline Fixes
           sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
           find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
 
@@ -63,8 +66,6 @@ jobs:
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
-          
-          # KCFLAGS passed directly to avoid quoting errors
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -76,7 +77,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-Master-Kernel
+          name: Ellis-True-Master-Kernel
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
