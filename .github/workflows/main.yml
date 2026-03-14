@@ -1,4 +1,4 @@
-name: "Ellis: Master Hardware Protocol V4.6"
+name: "Ellis: Master Hardware Protocol V4.7"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -17,33 +17,41 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Download and Extract GCC 64-bit
+          # GCC 64-bit
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
           
-          # Download and Extract GCC 32-bit (Using wildcards to prevent 'No such file' errors)
+          # GCC 32-bit
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Master Handshake (Symlink & Config)
+      - name: 🛡️ The Master Handshake (Sanitize & Bridge)
         working-directory: source
         run: |
+          # 1. Clean the 'Ghost' characters (removes \r from Kconfigs)
+          find . -type f -name "Kconfig*" -exec sed -i 's/\r//' {} +
+          
+          # 2. Setup Build Directory
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # THE CRITICAL SYMLINK FIX
-          # We create a link named 'v1' that points to the 'v1_1' source
+          # 3. Symlink: The 'v1' to 'v1_1' Bridge
           cd drivers/misc/mediatek/imgsensor/src/common/
           ln -sf v1_1 v1
           cd ../../../../../
           
-          # Global Infrastructure Fixes
-          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
+          # 4. Global Infrastructure: Fix the inline issue
+          # We check if file exists first to prevent 'No such file' error
+          if [ -f arch/arm64/Makefile ]; then
+            echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
+          else
+            echo "ERROR: arch/arm64/Makefile not found!" && exit 1
+          fi
 
-          # Configure Hardware Context
+          # 5. Hardware Config
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -60,8 +68,7 @@ jobs:
             --enable CONFIG_MOTOROLA_FINGERPRINT \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
-            --disable CONFIG_BLK_INLINE_ENCRYPTION \
-            --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
+            --disable CONFIG_BLK_INLINE_ENCRYPTION
           
           make O=out olddefconfig
 
@@ -85,5 +92,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V4.6
+          name: Ellis-Kernel-V4.7
           path: source/out/arch/arm64/boot/Image.gz
