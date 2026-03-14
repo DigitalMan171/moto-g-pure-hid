@@ -23,21 +23,22 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Unified Path & Sensor Fix)
+      - name: 🛡️ The Master Conversation (V1_1 Alignment)
         working-directory: source
         run: |
-          # 🔍 READ-ONLY AUDIT: This prints the actual folder structure to the log
-          echo "--- START PATH AUDIT ---"
-          find drivers/misc/mediatek/imgsensor -name "s5k*" -type d || echo "Sensors not found"
-          echo "--- END PATH AUDIT ---"
+          # Audit specifically for any front camera sensors starting with 's5k'
+          echo "--- RE-AUDITING FRONT SENSOR ---"
+          find drivers/misc/mediatek/imgsensor -name "s5k5*" -type d || echo "s5k5e9 not found"
+          echo "--- END AUDIT ---"
 
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # 🛠️ THE DOUBLE-JUMP REPAIR:
-          # Replaces legacy "../common/v1" with "../../common" to match Motorola tree.
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1/..\/..\/common/g' {} +
+          # THE FIX: Pointing legacy 'v1' to the actual 'v1_1' folder
+          # We also keep the 'v1' fallback just in case some drivers use it
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1\//..\/..\/common\/v1_1\//g' {} +
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1_1\/s5k3l6/..\/..\/common\/v1\/s5k3l6/g' {} +
           
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
@@ -45,36 +46,23 @@ jobs:
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
             --enable CONFIG_MTK_NANOHUB \
-            --enable CONFIG_MTK_I2C \
-            --enable CONFIG_MTK_LCM \
             --enable CONFIG_MTK_SENSOR_SUPPORT \
-            --enable CONFIG_MTK_AUTO_DETECT_ACCELEROMETER \
             --enable CONFIG_MTK_BMI160_I2C \
             --enable CONFIG_VIDEO_MEDIATEK_V4L2 \
             --enable CONFIG_MTK_MMSYS \
             --enable CONFIG_MTK_IOMMU \
             --enable CONFIG_MTK_CMDQ \
-            --enable CONFIG_TRUSTY \
-            --enable CONFIG_TOUCH_INTERFACE \
             --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
             --enable CONFIG_FINGERPRINT_GOODIX \
-            --enable CONFIG_MTK_ROUND_CORNER \
-            --set-val CONFIG_MTK_GAUGE_VERSION 30 \
-            --set-val CONFIG_MTK_COMPOSITE_VER 2 \
-            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e9_mipi_raw" \
-            --disable CONFIG_MTK_ACCEL_LIS2HH12 \
-            --disable CONFIG_TOUCHSCREEN_HIMAX_INCELL \
-            --disable CONFIG_USB_G_ANDROID \
-            --disable CONFIG_ANDROID_PARANOID_NETWORK \
-            --disable CONFIG_UCLAMP_TASK \
+            # Temporarily using ONLY the rear sensor we found to see if it compiles
+            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw" \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
           
-          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
           make O=out olddefconfig
-
+          
       - name: 🚀 Execute Build
         working-directory: source
         run: |
