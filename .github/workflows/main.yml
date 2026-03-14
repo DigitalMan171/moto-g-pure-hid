@@ -1,4 +1,4 @@
-name: Moto G Pure Kernel Build & Magisk Repack
+name: Moto G Pure HID Kernel Build
 
 on:
   workflow_dispatch:
@@ -8,24 +8,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Kernel Source
+    - name: Checkout Source
       uses: actions/checkout@v4
 
-    - name: Set Up Build Environment
+    - name: Setup Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git
 
-    - name: Fetch Toolchains
+    - name: Toolchain Setup
       run: |
-        mkdir toolchains
-        cd toolchains
-        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
-        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
-        echo "TOOLCHAIN_64=$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_ENV
-        echo "TOOLCHAIN_32=$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_ENV
+        mkdir tc
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
+        echo "PATH=$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH" >> $GITHUB_ENV
 
-    - name: Configure HID Flags
+    - name: Configure HID Drivers
       run: |
         chmod +x scripts/config
         ./scripts/config --file arch/arm64/configs/vendor/ellis_defconfig \
@@ -36,34 +34,23 @@ jobs:
           -e CONFIG_HIDRAW \
           -e CONFIG_HID_GENERIC \
           -e CONFIG_USB_CONFIGFS_UEVENT
-        echo "Checklist Verification:"
+        
+        echo "Verifying Flags in Vendor Config:"
         grep -E "CONFIG_USB_F_HID|CONFIG_HIDRAW" arch/arm64/configs/vendor/ellis_defconfig
 
     - name: Compile Kernel
       run: |
-        export PATH="$TOOLCHAIN_64:$TOOLCHAIN_32:$PATH"
+        # MediaTek builds require O=out and the vendor/ prefix
         make O=out ARCH=arm64 vendor/ellis_defconfig
         make -j$(nproc --all) O=out \
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-android- \
           CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CC=clang
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu-
 
-    - name: AIK Repack (Magisk Preservation)
-      run: |
-        git clone https://github.com/osm0sis/Android-Image-Kitchen.git AIK
-        cp boot.img AIK/boot.img
-        cd AIK
-        chmod +x unpackimg.sh repackimg.sh bin/magiskboot
-        ./unpackimg.sh boot.img
-        # Overwrite only the kernel, keep the Magisk ramdisk
-        cp ../out/arch/arm64/boot/Image.gz-dtb split_img/boot.img-kernel
-        ./repackimg.sh
-        mv image-new.img ../patched-boot-HID.img
-
-    - name: Upload Finished Image
+    - name: Export Image
       uses: actions/upload-artifact@v4
       with:
-        name: ellis-HID-patched-boot
-        path: patched-boot-HID.img
+        name: Image-ellis-HID
+        path: out/arch/arm64/boot/Image.gz-dtb
