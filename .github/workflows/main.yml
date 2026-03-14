@@ -1,4 +1,4 @@
-name: "Ellis Pro-Build: Phase-Isolated & Standardized"
+name: "Ellis Pro-Build: Surgical Makefile Standard"
 on:
   workflow_dispatch:
 
@@ -27,52 +27,57 @@ jobs:
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes & Symbol De-confliction"
+      - name: "Tier 1: Surgical Makefile Patches"
         run: |
-          # 1. Clean the global Makefile of -Werror to prevent fatal warnings
-          sed -i 's/-Werror//g' Makefile
+          # 1. TARGETED FLAG INJECTION: 
+          # We append flags directly to KBUILD_CFLAGS in the Makefile. 
+          # This ensures they only apply to the phone's kernel code, not build tools.
+          sed -i '/KBUILD_CFLAGS   :=/ s/$/ -fcommon -Wno-return-type -Wno-implicit-function-declaration -Wno-unused-variable -Wno-unused-function/' Makefile
           
-          # 2. Rename vendor symbols to prevent HID gadget collisions
+          # 2. DISABLE WERROR: Prevents minor vendor code warnings from breaking the build.
+          sed -i 's/-Werror//g' Makefile
+
+          # 3. SYMBOL RENAMING: Prevents vendor 'hidg_' symbols from clashing with standard Linux HID.
           find drivers/misc/mediatek -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/hidg_/mtk_hidg_/g' {} +
 
-          # 3. FIX: CPUFreq Header Guards (Ellis specific)
+          # 4. FIX: CPUFreq Header Guards
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
           sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
           sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
 
-      - name: "Tier 2: Kconfig 'Clean Room' Logic"
+      - name: "Tier 2: Kconfig 'Standard' Preparation"
         run: |
           mkdir -p $OUT_DIR
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
           make O=$OUT_DIR k65v1_64_bsp_defconfig
           
-          # Force-disable the Himax conflict from your logs to stop the config-restart loop
+          # Fix the Himax conflict to prevent the interactive config loop
           sed -i 's/CONFIG_TOUCHSCREEN_HIMAX_INCELL=y/CONFIG_TOUCHSCREEN_HIMAX_INCELL=n/' $OUT_DIR/.config
           
-          # Standardize USB for Xbox/HID without breaking ADB/MTP
+          # USB Standard Config for HID/Xbox support
           ./scripts/config --file $OUT_DIR/.config -d USB_G_ANDROID
           ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS
           ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS_F_HID
           ./scripts/config --file $OUT_DIR/.config -e HIDRAW
+          
+          # Security bypass for easier peripheral development
           ./scripts/config --file $OUT_DIR/.config -d SECURITY_SELINUX
           ./scripts/config --file $OUT_DIR/.config --set-val SECURITY_SELINUX_BOOTPARAM_VALUE 0
           
-          # Auto-confirm any interactive prompts (LTO, ASLR, etc.)
+          # Auto-confirm dependency questions (LTO, ASLR, etc.)
           yes "" | make O=$OUT_DIR olddefconfig
 
-      - name: "Tier 3: Execution (Isolated Argument Protocol)"
+      - name: "Tier 3: Execution (The Clean Environment Build)"
         run: |
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
           
-          # CRITICAL: We pass KCFLAGS as a command-line argument, NOT an exported variable.
-          # This ensures the 'scripts/' phase uses standard flags while drivers get our fix.
-          
+          # No KCFLAGS exported here. The Makefile now handles the logic internally.
+          # This avoids the 'unknown argument' errors in the scripts phase.
           make O=$OUT_DIR \
                CC=clang \
                CROSS_COMPILE=aarch64-none-linux-gnu- \
                LD=ld.lld \
                KBUILD_LDFLAGS="--allow-multiple-definition" \
-               KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP -Wno-return-type -Wno-implicit-function-declaration -Wno-unused-variable -fcommon -fno-pie" \
                -j$(nproc) Image.gz dtbs
 
       - name: "Upload Certified Artifacts"
