@@ -1,85 +1,53 @@
-name: "Ellis Pro-Build: Toolchain-Locked & Security-Unlocked"
-on:
+name: Ellis Official Build - Self-Contained Protocol
+on: 
+  push:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    env:
-      ARCH: arm64
-      SUBARCH: arm64
-      CLANG_PATH: ${{ github.workspace }}/clang-aosp/bin
-      GCC_PATH: ${{ github.workspace }}/toolchains/bin
-      OUT_DIR: ${{ github.workspace }}/out
-      MTK_PLATFORM: mt6765
-
+  build-kernel:
+    runs-on: ubuntu-latest
     steps:
-      - name: "Checkout Motorola Official Source"
+      - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          repository: 'MotorolaMobilityLLC/kernel-mtk'
+          repository: 'MotorolaMobilityLLC/kernel-msm'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
-          path: './'
 
-      - name: "Provision Version-Specific Toolchains"
+      - name: Sync Toolchains (LineageOS Clang & GCC)
         run: |
-          mkdir -p toolchains
-          wget -q https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
-          tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
+          git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
+          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
+          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: "Tier 1: Surgical Fixes & De-confliction"
+      - name: Surgical Configuration (HID Injection)
         run: |
-          # 1. REMOVE WERROR: Strip it from the main Makefile so it doesn't override our KCFLAGS
-          sed -i 's/-Werror//g' Makefile
-          
-          # 2. VENDOR DE-CONFLICTION: Bulk-rename vendor HID symbols
-          find drivers/misc/mediatek -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/hidg_/mtk_hidg_/g' {} +
+          # Injecting HID flags directly into the Ellis defconfig
+          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_USB_CONFIGFS_F_HID
+          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_HID_GENERIC
+          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_USB_HID
+          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_INPUT_JOYSTICK
+          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_JOYSTICK_XPAD
 
-          # 3. FIX: CPUFreq Redefinition
-          FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
-          sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
-          sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
-
-      - name: "Tier 2: Kconfig 'Standardization' Logic"
+      - name: Compile Kernel
         run: |
-          mkdir -p $OUT_DIR
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          make O=$OUT_DIR k65v1_64_bsp_defconfig
+          export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            vendor/ellis_defconfig
           
-          # Use scripts/config for precision
-          ./scripts/config --file $OUT_DIR/.config -d USB_G_ANDROID
-          ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS
-          ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS_F_HID
-          ./scripts/config --file $OUT_DIR/.config -e HIDRAW
-          ./scripts/config --file $OUT_DIR/.config -d SECURITY_SELINUX
-          ./scripts/config --file $OUT_DIR/.config --set-val SECURITY_SELINUX_BOOTPARAM_VALUE 0
-          
-          make O=$OUT_DIR olddefconfig
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi-
 
-      - name: "Tier 3: Execution (The Corrected Syntax Build)"
-        run: |
-          export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
-          
-          # FIXED KCFLAGS: Removed spaces around '=' and fixed Clang warning names
-          # -Wno-implicit-function-declaration is the correct Clang flag (no 'error' in middle)
-          export KCFLAGS="-D__ANDROID_COMMON_KERNEL__ -DMTK_K65V1_64_BSP \
-                          -Wno-return-type -Wno-implicit-function-declaration \
-                          -Wno-unused-variable -Wno-unused-function \
-                          -Wno-declaration-after-statement \
-                          -fcommon -fno-strict-aliasing -fno-pie"
-          
-          make O=$OUT_DIR \
-               CC=clang \
-               CROSS_COMPILE=aarch64-none-linux-gnu- \
-               LD=ld.lld \
-               KBUILD_LDFLAGS="--allow-multiple-definition" \
-               -j$(nproc) Image.gz dtbs
-
-      - name: "Upload Certified Artifacts"
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Pro-Complete"
+          name: Ellis-Kernel-HID
           path: |
-             out/arch/arm64/boot/Image.gz
-             out/arch/arm64/boot/dts/mediatek/*.dtb
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dts/vendor/ellis*.dtb
