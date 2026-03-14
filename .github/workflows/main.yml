@@ -1,4 +1,4 @@
-name: "Ellis: Base Hardware Test V3.6"
+name: "Ellis: Path Fix Build V3.7"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,15 +23,19 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Hardware Discovery Run)
+      - name: 🛡️ The Master Conversation (Surgical Path Alignment)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # We are testing if the base command works WITHOUT surgical pathing.
-          # Using the confirmed sensor names from the previous audit.
+          # 🛠️ SURGICAL PATH REPAIR
+          # 1. Fixes the rear sensor path (pointing from ghost 'v1' to actual 'v1_1')
+          # 2. Ensures the double-jump '../..' escapes the platform subfolder
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1_1/..\/..\/common\/v1_1/g' {} +
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1/..\/..\/common\/v1/g' {} +
+          
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -86,5 +90,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V3.6
+          name: Ellis-Kernel-V3.7
           path: source/out/arch/arm64/boot/Image.gz
