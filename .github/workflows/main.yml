@@ -1,4 +1,4 @@
-name: "Ellis: Golden Build Protocol V2.7"
+name: "Ellis: Golden Build Protocol V3.2"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,14 +23,19 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Hardware & Path Answers)
+      - name: 🛡️ The Master Conversation (Audit & Build)
         working-directory: source
         run: |
+          # Read-only audit to verify directory structure in the logs
+          echo "--- START PATH AUDIT ---"
+          find drivers/misc/mediatek/imgsensor -name "s5k*" -type d || echo "Sensor folders not found in expected root"
+          echo "--- END PATH AUDIT ---"
+
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # Repair the relative path Ghost for the imaging drivers
+          # Repair legacy MediaTek relative paths to match Motorola's actual layout
           find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1/../g' {} +
           
           ./scripts/config --file out/.config \
@@ -87,5 +92,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-Kernel-V2.7
+          name: Ellis-Kernel-V3.2
           path: source/out/arch/arm64/boot/Image.gz
