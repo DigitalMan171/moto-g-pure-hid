@@ -1,4 +1,4 @@
-name: "Ellis: Flag-Guided Official V3.9"
+name: "Ellis: Master Path Alignment V4.0"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,17 +23,25 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Inline & Flag Setup)
+      - name: 🛡️ The Master Conversation (Path & Inline Setup)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # Fix for legacy inline code (Crucial for MediaTek/Clang compatibility)
+          # 1. Fix legacy 'inline' for MediaTek drivers
           echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
           
-          # Official config using confirmed hardware strings
+          # 2. Correct the search paths (The 'Double Jump' fix)
+          # This fixes the "No such file" error by escaping the mt6765 folder correctly
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common/..\/..\/common/g' {} +
+          
+          # 3. Ensure the build system knows about the v1_1 variant found in your audit
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/v1\//v1_1\//g' {} +
+          # (But we put v1 back for the front sensor s5k5e8yx which was in the v1 folder)
+          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/v1_1\/s5k5e8yx/v1\/s5k5e8yx/g' {} +
+
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -41,7 +49,6 @@ jobs:
             --enable CONFIG_INPUT_UINPUT \
             --enable CONFIG_MTK_NANOHUB \
             --enable CONFIG_MTK_SENSOR_SUPPORT \
-            --enable CONFIG_MTK_BMI160_I2C \
             --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
@@ -60,12 +67,8 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # Manufacturer Environment Variables for Path Resolution
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
-          export MTK_PLATFORM_DIR=mt6765
-          
-          # -fcommon allows duplicate global definitions often found in MTK drivers
           export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
           
           make -j$(nproc) O=out
@@ -73,5 +76,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V3.9
+          name: Ellis-Kernel-V4.0
           path: source/out/arch/arm64/boot/Image.gz
