@@ -1,14 +1,14 @@
-name: "Ellis: Protocol-Hardened HID Kernel"
+name: "Ellis: Full Hardware & HID Protocol"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Install Noble Dependencies (Legacy Support)
+      - name: 📦 Install Legacy & Modern Dependencies
         run: |
           sudo apt-get update
-          # Injecting Jammy (22.04) security repo to obtain libncurses5 on 24.04
+          # Injecting Ubuntu 22.04 security repo for libncurses5 (Required by ARM 10.3)
           echo "deb http://security.ubuntu.com/ubuntu jammy-security main universe" | sudo tee /etc/apt/sources.list.d/jammy-security.list
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
@@ -18,7 +18,7 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Protocol: Replacing obsolete AOSP 4.9 with official ARM 10.3
+          # Official ARM GCC 10.3 - Satisfies kernel 5.1+ requirement
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu gcc64
@@ -27,57 +27,64 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🧪 Apply Surgical Repairs
-        working-directory: source
-        run: |
-          # RP-01: Fix Battery Table type mismatch
-          sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
-          
-          # RP-02: Hard-inject Sensor Hub headers
-          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
-          
-          # RP-03: Modem Pointer Casting Fix (Double-cast for LP64)
-          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(u32)(unsigned long)data_8ptr/g' {} +
-
-      - name: 🛡️ ConfigFS & HID Migration
+      - name: 🛡️ Hardware Conversation (Answering the .config)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
+          # Step 1: Initialize the Motorola Template
           make O=out k65v1_64_bsp_defconfig
+          
+          # Step 2: Answer Hardware & Protocol Questions
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
-            --disable CONFIG_USB_G_ANDROID
+            --enable CONFIG_INPUT_UINPUT \
+            --enable CONFIG_MTK_NANOHUB \
+            --enable CONFIG_MTK_CCCI_DEVICES \
+            --enable CONFIG_MTK_I2C \
+            --enable CONFIG_MTK_LCM \
+            --set-val CONFIG_MTK_GAUGE_VERSION 30 \
+            --disable CONFIG_WERROR \
+            --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
+          
+          # Step 3: Apply Architecture Fixes to Makefile
+          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
+          
+          # Step 4: Finalize the Config
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build Script Environment
+      - name: 🧪 Surgical Code Repairs
         working-directory: source
         run: |
-          # 1. Update Path for Clang + New GCC 10 binaries
-          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
+          # Fix Battery Table (Incomplete type error)
+          sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           
-          # 2. Variable Definition (Using official ARM prefixes)
+          # Fix Sensor Hub pathing visibility
+          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
+
+      - name: 🚀 Execute Compiling
+        working-directory: source
+        run: |
+          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # 3. MediaTek Environment Parameters
+          # MediaTek Factory Variables
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # 4. Global Flags
+          # Command Line Overrides
           export KBUILD_LDFLAGS="--allow-multiple-definition"
-          export KCFLAGS="-fcommon -fno-builtin -Wno-error=implicit-function-declaration -Wno-error=pointer-to-int-cast"
           
-          # 5. Build
           make -j$(nproc) O=out
 
-      - name: 📦 Upload Artifacts
+      - name: 📦 Upload Ellis Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
+          name: Ellis-HID-Image
           path: source/out/arch/arm64/boot/Image.gz
