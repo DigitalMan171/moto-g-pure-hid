@@ -1,42 +1,68 @@
-name: Ellis Final Build Protocol
-on: [push, workflow_dispatch]
+name: "Ellis Pro-Build: HID-Master & Security-Bypass"
+on: 
+  push:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source
+      - name: Checkout MediaTek Source
         uses: actions/checkout@v4
         with:
           repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
+          fetch-depth: 1
 
-      - name: Restore Toolchains
+      - name: Toolchain Lock (LineageOS & AOSP)
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: Apply Surgical Config
+      - name: Surgical Code Fixes (Morning Manifest)
         run: |
-          # Confirmed path from yesterday: arch/arm64/configs/ellis_defconfig
+          # 1. ksm_flock 'inline' fix (Compiler Strictness)
+          find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
+          
+          # 2. CPUFreq Isolated Guard (MediaTek Redefinition Fix)
+          sed -i '/struct cpufreq_policy {/i #ifndef __CPUFREQ_POLICY_GUARD\n#define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
+          sed -i '/};/a #endif' include/linux/cpufreq.h
+
+          # 3. mrdump_panic Pointer Alignment (64-bit Pointer Truncation Fix)
+          sed -i 's/(void \*)addr/(uintptr_t)addr/g' drivers/misc/mediatek/mrdump/mrdump_panic.c || true
+
+      - name: Apply HID & Security Bypasses
+        run: |
           CONF=arch/arm64/configs/ellis_defconfig
+          
+          # HID Functionality (Mouse/Keyboard Capability)
           ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_CONFIGFS_F_HID
           ARCH=arm64 scripts/config --file $CONF --enable CONFIG_HID_GENERIC
           ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_HID
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_INPUT_JOYSTICK
+          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_INPUT_UINPUT
+          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_HIDRAW
+          
+          # Security Bypass (Permissive Mode & Mechanical Purity)
           ARCH=arm64 scripts/config --file $CONF --disable CONFIG_SECURITY_SELINUX_DEVELOP
+          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_CONFIGFS_F_FS
+          
+          # Exporting Group Fix Flags
+          echo "KBUILD_LDFLAGS=--allow-multiple-definition" >> $GITHUB_ENV
+          echo "KCFLAGS=-fcommon -Wno-error -O2" >> $GITHUB_ENV
 
-      - name: Build Execution
+      - name: Build Execution (Nuclear Linker Protocol)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
-          ARGS="ARCH=arm64 O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi-"
+          ARGS="ARCH=arm64 O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- KCFLAGS='${{ env.KCFLAGS }}' KBUILD_LDFLAGS='${{ env.KBUILD_LDFLAGS }}'"
           
           make $ARGS ellis_defconfig
           make -j$(nproc) $ARGS
 
-      - name: Upload Image
+      - name: Package Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
-          path: out/arch/arm64/boot/Image.gz
+          name: Ellis-HID-ProBuild
+          path: |
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dts/vendor/ellis*.dtb
