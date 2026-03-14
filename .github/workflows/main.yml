@@ -1,16 +1,17 @@
-name: "Ellis: Golden Build Protocol V2.0"
+name: "Ellis: Golden Build Protocol V2.2"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Environment Setup (Legacy Libs)
+      - name: 📦 Environment Setup (Ghost Purged)
         run: |
           sudo apt-get update
           echo "deb http://security.ubuntu.com/ubuntu jammy-security main universe" | sudo tee /etc/apt/sources.list.d/jammy-security.list
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync electronics-tools xsltproc zip zlib1g-dev
+          # Swapped "electronics-tools" for actual kernel build requirements: libelf-dev & dwarves
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
 
       - name: 🌐 Clone Source & Toolchains
         run: |
@@ -78,8 +79,6 @@ jobs:
           export CC=clang
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
-          
-          # Global Flags for MediaTek Driver Reconciliation
           export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration -Wno-error=pointer-to-int-cast"
           
           make -j$(nproc) O=out
@@ -87,5 +86,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-Kernel-V2
+          name: Ellis-Final-Kernel-V2.2
           path: source/out/arch/arm64/boot/Image.gz
