@@ -1,4 +1,4 @@
-name: "Ellis Pro-Build: Standardized & De-conflicted"
+name: "Ellis Pro-Build: Phase-Isolated & Standardized"
 on:
   workflow_dispatch:
 
@@ -27,15 +27,15 @@ jobs:
           tar -xJf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchains --strip-components=1
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
-      - name: "Tier 1: Surgical Fixes & De-confliction"
+      - name: "Tier 1: Surgical Fixes & Symbol De-confliction"
         run: |
-          # 1. Global Sanitization: Remove -Werror so minor vendor warnings aren't fatal
+          # 1. Clean the global Makefile of -Werror to prevent fatal warnings
           sed -i 's/-Werror//g' Makefile
           
-          # 2. Symbol De-confliction: Rename vendor symbols to prevent HID collisions
+          # 2. Rename vendor symbols to prevent HID gadget collisions
           find drivers/misc/mediatek -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/hidg_/mtk_hidg_/g' {} +
 
-          # 3. FIX: CPUFreq Redefinition (The known Ellis header conflict)
+          # 3. FIX: CPUFreq Header Guards (Ellis specific)
           FILE="drivers/misc/mediatek/include/mt-plat/mt6765/include/mach/mtk_cpufreq_api.h"
           sed -i '/enum mt_cpu_dvfs_id {/i #ifndef _MT_CPU_DVFS_ID_\n#define _MT_CPU_DVFS_ID_' $FILE
           sed -i '/MT_CPU_DVFS_ID_MAX/!b;n;s/};/};\n#endif/' $FILE
@@ -46,10 +46,10 @@ jobs:
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
           make O=$OUT_DIR k65v1_64_bsp_defconfig
           
-          # Fix the Himax conflict seen in the logs to prevent config-restart
+          # Force-disable the Himax conflict from your logs to stop the config-restart loop
           sed -i 's/CONFIG_TOUCHSCREEN_HIMAX_INCELL=y/CONFIG_TOUCHSCREEN_HIMAX_INCELL=n/' $OUT_DIR/.config
           
-          # Protocol-compliant ConfigFS setup for Xbox/HID
+          # Standardize USB for Xbox/HID without breaking ADB/MTP
           ./scripts/config --file $OUT_DIR/.config -d USB_G_ANDROID
           ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS
           ./scripts/config --file $OUT_DIR/.config -e USB_CONFIGFS_F_HID
@@ -57,15 +57,15 @@ jobs:
           ./scripts/config --file $OUT_DIR/.config -d SECURITY_SELINUX
           ./scripts/config --file $OUT_DIR/.config --set-val SECURITY_SELINUX_BOOTPARAM_VALUE 0
           
-          # Auto-confirm any remaining dependency questions
+          # Auto-confirm any interactive prompts (LTO, ASLR, etc.)
           yes "" | make O=$OUT_DIR olddefconfig
 
-      - name: "Tier 3: Execution (Delayed Injection Protocol)"
+      - name: "Tier 3: Execution (Isolated Argument Protocol)"
         run: |
           export PATH="$CLANG_PATH:$GCC_PATH:$PATH"
           
-          # We do NOT export KCFLAGS. We pass it directly to the 'make' command.
-          # This protects 'scripts/' and 'hosttools/' from incompatible flags.
+          # CRITICAL: We pass KCFLAGS as a command-line argument, NOT an exported variable.
+          # This ensures the 'scripts/' phase uses standard flags while drivers get our fix.
           
           make O=$OUT_DIR \
                CC=clang \
@@ -78,7 +78,7 @@ jobs:
       - name: "Upload Certified Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: "Ellis-Pro-Final"
+          name: "Ellis-Pro-Complete"
           path: |
              out/arch/arm64/boot/Image.gz
              out/arch/arm64/boot/dts/mediatek/*.dtb
