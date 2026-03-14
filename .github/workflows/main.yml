@@ -5,10 +5,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Build Dependencies
+      - name: Install Build Dependencies (Updated)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
 
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -25,29 +25,23 @@ jobs:
 
       - name: 🧪 Surgical Ledger (Verified Repairs)
         run: |
-          # 1. Battery Driver: Type Alias
+          # 1. Battery Driver Fix
           sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i '2i #define FUELGAUGE_TEMPERATURE fuelgauge_temperature' drivers/power/supply/mtk_battery_table.h
 
-          # 2. Sensors Visibility: Hub Headers
+          # 2. Sensor Hub Header Visibility
           find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
 
-          # 3. ECCCI & mrdump Pointers: 64-bit Portability
+          # 3. 64-bit Pointer Casts (ECCCI & mrdump)
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(unsigned long)data_64ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(unsigned long)data_8ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_ptr/(unsigned long)data_ptr/g' {} +
           find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
 
-          # 4. CPUFreq & Mach Header Guards
-          sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
-          sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
-          echo "#endif" >> include/linux/cpufreq.h
-          sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
-
-          # 5. MediaTek Specific: Force -fcommon for Video Drivers
+          # 4. Global Linker Conflict Prevention (-fcommon)
           find drivers/misc/mediatek/video -name "Makefile" -exec sed -i 's/EXTRA_CFLAGS +=/EXTRA_CFLAGS += -fcommon /g' {} +
 
-      - name: 🛡️ Feature Activation (HID Gadget)
+      - name: 🛡️ HID Feature Activation
         run: |
           mkdir -p out
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
@@ -65,12 +59,13 @@ jobs:
 
           make O=out ARCH=arm64 olddefconfig
 
-      - name: 🚀 Build Execution (Corrected Linker & Diagnostics)
+      - name: 🚀 Build Execution
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
           
-          # Native GCC linker fallback with stripped diagnostic warnings to reveal true errors
+          # We use the standard linker (LD) to avoid the previous -Wl crash.
+          # -fcommon allows merging of MediaTek's messy global variables.
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
