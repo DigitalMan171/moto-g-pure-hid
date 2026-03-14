@@ -14,7 +14,7 @@ jobs:
     - name: Set Up Build Environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
+        sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git
 
     - name: Fetch Toolchains
       run: |
@@ -25,30 +25,32 @@ jobs:
         echo "TOOLCHAIN_64=$GITHUB_WORKSPACE/toolchains/gcc64/bin" >> $GITHUB_ENV
         echo "TOOLCHAIN_32=$GITHUB_WORKSPACE/toolchains/gcc32/bin" >> $GITHUB_ENV
 
-    - name: Configure HID Flags
+    - name: Configure and Verify HID Flags
       run: |
-        # Using scripts/config to ensure proper syntax and avoid conflicts
-        ARCH=arm64 scripts/config --file arch/arm64/configs/ellis_defconfig \
+        # 1. Locate files dynamically
+        CONFIG_TOOL=$(find . -name "config" -path "*/scripts/*" | head -n 1)
+        DEFCONFIG=$(find arch/arm64/configs -name "ellis_defconfig" | head -n 1)
+
+        if [ -z "$CONFIG_TOOL" ] || [ -z "$DEFCONFIG" ]; then
+          echo "ERROR: Required files (config script or defconfig) not found!"
+          exit 1
+        fi
+
+        echo "Using Config Tool: $CONFIG_TOOL"
+        echo "Using Defconfig: $DEFCONFIG"
+        chmod +x "$CONFIG_TOOL"
+
+        # 2. Apply Flags
+        "$CONFIG_TOOL" --file "$DEFCONFIG" \
           -e CONFIG_USB_G_HID \
           -e CONFIG_USB_CONFIGFS_F_HID \
           -e CONFIG_USB_F_HID \
           -e CONFIG_INPUT_UINPUT \
           -e CONFIG_HIDRAW \
-          -e CONFIG_HID_GENERIC
+          -e CONFIG_HID_GENERIC \
+          -e CONFIG_USB_CONFIGFS_UEVENT
 
-    - name: Compile Kernel
-      run: |
-        export PATH="$TOOLCHAIN_64:$TOOLCHAIN_32:$PATH"
-        make O=out ARCH=arm64 ellis_defconfig
-        make -j$(nproc --all) O=out \
-          ARCH=arm64 \
-          CROSS_COMPILE=aarch64-linux-android- \
-          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CC=clang
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: MotoGPure-Kernel-HID
-        path: out/arch/arm64/boot/Image.gz-dtb
+        # 3. Verification Step (Our "Checklist")
+        echo "--- Verification of HID Flags ---"
+        grep -E "CONFIG_USB_F_HID|CONFIG_HIDRAW|CONFIG_INPUT_UINPUT" "$DEFCONFIG"
+        echo "----------------
