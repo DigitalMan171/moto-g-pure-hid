@@ -1,4 +1,4 @@
-name: "Ellis: Master Hardware Integration V4.3"
+name: "Ellis: Manufacturer Variable Protocol V4.4"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,21 +23,17 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Hardware Logic & Path Repair)
+      - name: 🛡️ The Master Conversation (Variable Injection)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # 1. Path Repair: Escaping mt6765 subfolder & mapping folders
-          # The "Double Jump" to reach common
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common/..\/..\/common/g' {} +
-          # Force v1_1 for Rear (s5k4h7) and v1 for Front (s5k5e8yx)
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/common\/v1/common\/v1_1/g' {} +
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/v1_1\/s5k5e8yx/v1\/s5k5e8yx/g' {} +
+          # Force the legacy inline behavior for MTK C code
+          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
 
-          # 2. Comprehensive Hardware Configuration
+          # Configure Manufacturer Hardware Flags
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -46,21 +42,20 @@ jobs:
             --enable CONFIG_MTK_IMGSENSOR \
             --enable CONFIG_MTK_IMGSENSOR_COMMON_V1_1 \
             --enable CONFIG_MTK_CAM_GENERIC \
+            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
+            --set-str CONFIG_MTK_PLATFORM_SENSOR "mt6765" \
             --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
             --enable CONFIG_TOUCHSCREEN_GOODIX_BERLIN_I2C \
             --enable CONFIG_FINGERPRINT_GOODIX \
             --enable CONFIG_MOTOROLA_FINGERPRINT \
-            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
           
-          # 3. Apply the 'inline' bridge and finalize
-          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build
+      - name: 🚀 Execute Build (MTK Official Context)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -71,8 +66,12 @@ jobs:
           export CC=clang
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           
+          # MANUFACTURER CONTEXT VARIABLES
+          # These are used by the Makefiles to build the internal path logic
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
+          export MTK_PROJECT_PATH_ROOT=$(pwd)/drivers/misc/mediatek
+          
           export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
           
           make -j$(nproc) O=out
@@ -80,5 +79,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V4.3
+          name: Ellis-Kernel-V4.4
           path: source/out/arch/arm64/boot/Image.gz
