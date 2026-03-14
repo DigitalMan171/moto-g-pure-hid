@@ -1,61 +1,42 @@
-name: Moto G Pure HID Kernel Build - Final Fix Set
-
-on:
-  workflow_dispatch:
+name: Moto G Pure S3RH-Series HID Build
+on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Source with Submodules
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive  # FIX: Pulls the actual content into scripts/ and arch/
-        fetch-depth: 1
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-    - name: Setup Build Environment
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git
+      - name: Setup Toolchain
+        run: sudo apt-get update && sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
 
-    - name: Toolchain Setup
-      run: |
-        mkdir tc
-        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
-        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
-        echo "$GITHUB_WORKSPACE/tc/gcc64/bin" >> $GITHUB_PATH
-        echo "$GITHUB_WORKSPACE/tc/gcc32/bin" >> $GITHUB_PATH
+      - name: Create Ellis HID Fragment
+        run: |
+          mkdir -p arch/arm64/configs/ext_config/
+          cat <<EOF > arch/arm64/configs/ext_config/usb_hid.config
+          # Disable Legacy Stack
+          # CONFIG_USB_G_HID is not set
+          
+          # Enable Modern 2026 ConfigFS Stack
+          CONFIG_USB_CONFIGFS=y
+          CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_USB_LIBCOMPOSITE=y
+          CONFIG_HID=y
+          CONFIG_HIDRAW=y
+          CONFIG_UHID=y
+          CONFIG_INPUT_UINPUT=y
+          EOF
 
-    - name: Configure HID Drivers
-      run: |
-        # Submodules are synced; scripts/config is now accessible
-        chmod +x scripts/config
-        ./scripts/config --file arch/arm64/configs/vendor/ellis_defconfig \
-          -e CONFIG_USB_G_HID \
-          -e CONFIG_USB_CONFIGFS_F_HID \
-          -e CONFIG_USB_F_HID \
-          -e CONFIG_INPUT_UINPUT \
-          -e CONFIG_HIDRAW \
-          -e CONFIG_HID_GENERIC \
-          -e CONFIG_USB_CONFIGFS_UEVENT
-        
-        echo "--- Verification: Flags successfully injected ---"
-        grep -E "CONFIG_USB_F_HID|CONFIG_HIDRAW" arch/arm64/configs/vendor/ellis_defconfig
-
-    - name: Compile Kernel
-      run: |
-        # Use the vendor prefix for the ellis MTK configuration merge
-        make O=out ARCH=arm64 vendor/ellis_defconfig
-        make -j$(nproc --all) O=out \
-          ARCH=arm64 \
-          CROSS_COMPILE=aarch64-linux-android- \
-          CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-          CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu-
-
-    - name: Export Image.gz-dtb
-      uses: actions/upload-artifact@v4
-      with:
-        name: Image-ellis-HID
-        path: out/arch/arm64/boot/Image.gz-dtb
+      - name: Build Official Ellis Kernel
+        run: |
+          # 1. Init Ellis Hardware
+          make O=out ARCH=arm64 vendor/ellis_defconfig
+          
+          # 2. Merge HID Reroute
+          ./scripts/kconfig/merge_config.sh -O out/ out/.config arch/arm64/configs/ext_config/usb_hid.config
+          
+          # 3. Compile
+          make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android-
