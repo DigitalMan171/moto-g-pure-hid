@@ -1,75 +1,64 @@
-name: "Ellis: Hardware-Safe HID Build"
+name: "Ellis: Protocol-Hardened HID Kernel"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Install Modernized Dependencies
+      - name: 📦 Install Noble Dependencies (Modernized)
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
 
-      - name: 🌐 Clone Source & Locked Toolchains
+      - name: 🌐 Clone Source & Toolchains
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64
 
-      - name: 🧪 Surgical Code Repairs
+      - name: 🧪 Verified Surgical Repairs (Protocol RP-01 to RP-03)
         working-directory: source
         run: |
-          # 1. MTK Battery Struct Repair (Incomplete type fix)
+          # RP-01: Battery Table Fix
           sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i '2i #define FUELGAUGE_TEMPERATURE fuelgauge_temperature' drivers/power/supply/mtk_battery_table.h
           
-          # 2. Nanohub Sensor Visibility Fix
+          # RP-02: Sensor Visibility Fix
           find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
           
-          # 3. 64-bit Pointer Truncation Repair (ECCCI & mrdump)
-          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(unsigned long)data_64ptr/g' {} +
-          find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
+          # RP-03: LP64 Pointer-to-Int Protocol Fix (The double-cast)
+          # Specifically targeting ccci_hif_dpmaif.c and general ECCCI drivers
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(u32)(unsigned long)data_8ptr/g' {} +
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(u32)(unsigned long)data_64ptr/g' {} +
+          find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_ptr/(u32)(unsigned long)data_ptr/g' {} +
 
-      - name: 🛡️ ConfigFS Migration & Permissive Logic
+      - name: 🛡️ ConfigFS Migration (Protocol USB-01/02)
         working-directory: source
         run: |
           mkdir -p out
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
-          
-          # DISABLE LEGACY: This clears the 'address' for our new HID
           ./scripts/config --file out/.config \
-            --disable CONFIG_USB_G_ANDROID \
-            --disable CONFIG_USB_ANDROID_CUSTOM_ADB \
-            --disable CONFIG_MTK_USB_G_ANDROID
-          
-          # ENABLE MODERN: Official HID Patch steps
-          ./scripts/config --file out/.config \
-            --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_USB_LIBCOMPOSITE \
-            --enable CONFIG_USB_CONFIGFS_F_HID \
-            --enable CONFIG_HIDRAW \
-            --enable CONFIG_INPUT_UINPUT \
-            --enable CONFIG_CONFIGFS_FS
-
+            --disable CONFIG_USB_G_ANDROID --disable CONFIG_USB_ANDROID_CUSTOM_ADB \
+            --enable CONFIG_USB_CONFIGFS --enable CONFIG_USB_LIBCOMPOSITE \
+            --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_HIDRAW \
+            --enable CONFIG_INPUT_UINPUT --enable CONFIG_CONFIGFS_FS \
+            --disable CONFIG_TYPEC_DP_ALTMODE
           make O=out ARCH=arm64 olddefconfig
 
-      - name: 🚀 Transparent Build Execution
+      - name: 🚀 Build Execution (Protocol LNK-01)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
-          
-          # Permissive Linking & Multi-Def Bypass
           make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             KCFLAGS="-fcommon -fno-builtin" \
             KBUILD_LDFLAGS="--allow-multiple-definition"
 
-      - name: 📦 Upload HID Artifacts
+      - name: 📦 Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
+          name: Ellis-Hardened-Kernel
           path: source/out/arch/arm64/boot/Image.gz
