@@ -1,4 +1,4 @@
-name: Ellis Official Build - Self-Contained Protocol
+name: "Ellis Pro-Build: Toolchain-Locked & Security-Unlocked"
 on: 
   push:
   workflow_dispatch:
@@ -10,27 +10,36 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          repository: 'MotorolaMobilityLLC/kernel-msm'
+          # Corrected repository for MediaTek (Ellis)
+          repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
+          fetch-depth: 1
 
-      - name: Sync Toolchains (LineageOS Clang & GCC)
+      - name: Sync Toolchains (Fixed Paths)
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: Surgical Configuration (HID Injection)
+      - name: Surgical Configuration (HID & Security)
         run: |
-          # Injecting HID flags directly into the Ellis defconfig
-          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_USB_CONFIGFS_F_HID
-          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_HID_GENERIC
-          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_USB_HID
-          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_INPUT_JOYSTICK
-          ARCH=arm64 scripts/config --file arch/arm64/configs/vendor/ellis_defconfig --enable CONFIG_JOYSTICK_XPAD
+          # Target the vendor-specific defconfig for Ellis
+          DEFCONFIG=arch/arm64/configs/vendor/ellis_defconfig
+          
+          # Inject HID Capabilities
+          ARCH=arm64 scripts/config --file $DEFCONFIG --enable CONFIG_USB_CONFIGFS_F_HID
+          ARCH=arm64 scripts/config --file $DEFCONFIG --enable CONFIG_HID_GENERIC
+          ARCH=arm64 scripts/config --file $DEFCONFIG --enable CONFIG_USB_HID
+          
+          # Security Unlock (Permissive & Debugging)
+          ARCH=arm64 scripts/config --file $DEFCONFIG --disable CONFIG_SECURITY_SELINUX_DEVELOP
+          ARCH=arm64 scripts/config --file $DEFCONFIG --enable CONFIG_USB_CONFIGFS_F_FS
 
       - name: Compile Kernel
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
+          
+          # Step 1: Initialize Config
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -38,6 +47,7 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             vendor/ellis_defconfig
           
+          # Step 2: Full Build
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -47,7 +57,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-HID
+          name: Ellis-Kernel-ProBuild
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
