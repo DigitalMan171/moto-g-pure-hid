@@ -1,4 +1,4 @@
-name: Moto G Pure S3RH-Series HID Build
+name: Moto G Pure Build & Verify
 on: [workflow_dispatch]
 
 jobs:
@@ -10,33 +10,41 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Toolchain
-        run: sudo apt-get update && sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
-
-      - name: Create Ellis HID Fragment
+      - name: Setup Build Environment
         run: |
-          mkdir -p arch/arm64/configs/ext_config/
-          cat <<EOF > arch/arm64/configs/ext_config/usb_hid.config
-          # Disable Legacy Stack
-          # CONFIG_USB_G_HID is not set
-          
-          # Enable Modern 2026 ConfigFS Stack
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm
+
+      - name: Inject HID Fragment
+        run: |
+          # Use the verified ext_config path from your screenshot
+          mkdir -p arch/arm64/configs/vendor/ext_config/
+          cat <<EOF > arch/arm64/configs/vendor/ext_config/usb_hid.config
+          # Modern 2026 ConfigFS Stack Reroute
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_LIBCOMPOSITE=y
-          CONFIG_HID=y
           CONFIG_HIDRAW=y
           CONFIG_UHID=y
           CONFIG_INPUT_UINPUT=y
           EOF
 
-      - name: Build Official Ellis Kernel
+      - name: Compile Kernel
         run: |
-          # 1. Init Ellis Hardware
-          make O=out ARCH=arm64 vendor/ellis_defconfig
+          # 1. Initialize using the precise path and filename from your 5th image
+          make O=out ARCH=arm64 vendor/ext_config/ellis_defconfig.config
           
-          # 2. Merge HID Reroute
-          ./scripts/kconfig/merge_config.sh -O out/ out/.config arch/arm64/configs/ext_config/usb_hid.config
+          # 2. Merge the HID fragment
+          ./scripts/kconfig/merge_config.sh -O out/ out/.config arch/arm64/configs/vendor/ext_config/usb_hid.config
           
-          # 3. Compile
+          # 3. Build
           make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android-
+
+      - name: Upload Build for Verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: ellis-kernel-files
+          path: |
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dts/vendor/*.dtbo
+          if-no-files-found: error
