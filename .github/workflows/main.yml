@@ -5,6 +5,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+
       - name: Checkout Source
         uses: actions/checkout@v4
         with:
@@ -12,7 +17,7 @@ jobs:
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
-      - name: Sync Toolchains (Clang r416183b + GCC)
+      - name: Sync Toolchains
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
@@ -20,20 +25,26 @@ jobs:
 
       - name: 🧪 Surgical Ledger (Verified Repairs)
         run: |
-          # 1. Battery Driver: Repair Struct Definition
+          # 1. Battery Driver: Type Alias
           sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
           sed -i '2i #define FUELGAUGE_TEMPERATURE fuelgauge_temperature' drivers/power/supply/mtk_battery_table.h
 
-          # 2. Sensors Visibility: Path Injection
+          # 2. Sensors Visibility: Hub Headers
           find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
 
-          # 3. ECCCI/mrdump Pointer Fixes (64-bit Portability)
+          # 3. ECCCI & mrdump Pointers: 64-bit Portability
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(unsigned long)data_64ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(unsigned long)data_8ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_ptr/(unsigned long)data_ptr/g' {} +
           find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
 
-          # 4. MediaTek Specific: Force -fcommon for Video Drivers (Line 4500 Root Cause)
+          # 4. CPUFreq & Mach Header Guards
+          sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
+          sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
+          echo "#endif" >> include/linux/cpufreq.h
+          sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
+
+          # 5. MediaTek Specific: Force -fcommon for Video Drivers
           find drivers/misc/mediatek/video -name "Makefile" -exec sed -i 's/EXTRA_CFLAGS +=/EXTRA_CFLAGS += -fcommon /g' {} +
 
       - name: 🛡️ Feature Activation (HID Gadget)
@@ -54,21 +65,19 @@ jobs:
 
           make O=out ARCH=arm64 olddefconfig
 
-      - name: 🚀 Build Execution (Verified Linker Guard)
+      - name: 🚀 Build Execution (Corrected Linker & Diagnostics)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
           
-          # KCFLAGS -fcommon: Merges tentative global definitions
-          # KBUILD_LDFLAGS -Wl: Passes allow-multiple-definition directly to the LLVM Linker
+          # Native GCC linker fallback with stripped diagnostic warnings to reveal true errors
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            LD=ld.lld \
-            KCFLAGS="-fcommon -fno-builtin -Wno-error -Wno-everything" \
-            KBUILD_LDFLAGS="-Wl,--allow-multiple-definition -Wl,-z,muldefs"
+            KCFLAGS="-fcommon -fno-builtin -Wno-everything" \
+            KBUILD_LDFLAGS="--allow-multiple-definition"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
