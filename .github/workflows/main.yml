@@ -1,4 +1,4 @@
-name: "Ellis: Unified Ledger Protocol"
+name: "Ellis: Total Recall Protocol"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -12,21 +12,25 @@ jobs:
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
-      - name: Sync Toolchains (Verified Versions)
+      - name: Sync Toolchains
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: 🧪 Apply Surgical Fixes (Header & Source)
+      - name: 🧪 Surgical Ledger (Restoring All Verified Fixes)
         run: |
-          # 1. CPUFreq Redefinition Fix
+          # 1. Battery Table Definition (The error you just hit)
+          # Injects the missing struct definition at the top of the battery table header
+          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
+
+          # 2. CPUFreq Guard (Fixes mt_cpu_dvfs_id redefinition)
           sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           echo "#endif" >> include/linux/cpufreq.h
 
-          # 2. Universal Visibility Injection (ECCCI/CCCI/Sensors)
-          # Specifically maps the mt6765 platform headers into every sub-Makefile
+          # 3. Universal Visibility Injection (ECCCI/CCCI/Sensors/Video)
+          # This forces the build to find the mt6765 platform headers
           PLAT_PATH=$(find drivers/misc/mediatek/include/mt-plat -name "mt6765" -type d | head -n 1)
           FOR_FIX="drivers/misc/mediatek/eccci drivers/misc/mediatek/ccci_util drivers/misc/mediatek/sensors-1.0 drivers/misc/mediatek/video"
           for dir in $FOR_FIX; do
@@ -35,11 +39,11 @@ jobs:
             fi
           done
 
-          # 3. Pointer Alignment (mrdump 64-bit Fix)
+          # 4. Pointer Alignment (mrdump 64-bit Fix)
           find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
           
-          # 4. Scheduler Inline Fix (uclamp_se_set)
-          # Prevents "conflicting types" error in late-stage compilation
+          # 5. Compiler Strictness (Inline to Static)
+          # Prevents "conflicting types" and "redefined" errors
           sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
           find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
 
@@ -47,8 +51,6 @@ jobs:
         run: |
           mkdir -p out
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
-          
-          # Enable HID & ConfigFS for your pointer peripheral project
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HID_GENERIC \
@@ -57,12 +59,12 @@ jobs:
             --enable CONFIG_HIDRAW \
             --disable CONFIG_SECURITY_SELINUX_DEVELOP
 
-      - name: 🚀 Build Execution (Safe Delivery)
+      - name: 🚀 Build Execution
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
           
-          # Variables passed directly to avoid shell 'Unterminated string' errors
+          # KCFLAGS passed directly to avoid quoting errors
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -74,7 +76,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Master-HID-Kernel
+          name: Ellis-Final-Master-Kernel
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
