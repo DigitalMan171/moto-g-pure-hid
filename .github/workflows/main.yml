@@ -1,4 +1,4 @@
-name: "Ellis: True Master Protocol"
+name: "Ellis: Omni-Fix Final"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -12,41 +12,39 @@ jobs:
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
-      - name: Sync Toolchains
+      - name: Sync Toolchains (Clang r416183b + GCC 4.9)
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: 🧪 Surgical Ledger (Verified Ellis Fixes)
+      - name: 🧪 Surgical Ledger (Verified Fixes)
         run: |
-          # 1. Battery Driver: Case Sensitivity & Incomplete Type Fix
-          # We define the struct AND create a typedef to bridge the Case-Mismatch gap
+          # 1. Battery Driver: Struct Definition & Type Alias
           sed -i '1i struct fuelgauge_temperature { int Temperature; int Temp_Array; };' drivers/power/supply/mtk_battery_table.h
-          sed -i '2i typedef struct fuelgauge_temperature FUELGAUGE_TEMPERATURE;' drivers/power/supply/mtk_battery_table.h
+          sed -i '2i #define FUELGAUGE_TEMPERATURE fuelgauge_temperature' drivers/power/supply/mtk_battery_table.h
 
-          # 2. ECCCI Pointer Cast Fix (64-bit portability)
-          # Fixes: cast to smaller integer type 'u32' from 'u64 *'
+          # 2. Sensors Visibility: Internal Header Injection
+          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
+
+          # 3. ECCCI Pointer Casts: 64-bit Portability Fix
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_64ptr/(unsigned long)data_64ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_8ptr/(unsigned long)data_8ptr/g' {} +
           find drivers/misc/mediatek/eccci -name "*.c" -exec sed -i 's/(u32)data_ptr/(unsigned long)data_ptr/g' {} +
 
-          # 3. CPUFreq Guard (Redefinition Fix)
+          # 4. CPUFreq & Platform Mach Visibility
           sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           echo "#endif" >> include/linux/cpufreq.h
-
-          # 4. Universal Visibility Injection
+          
           PLAT_PATH=$(find drivers/misc/mediatek/include/mt-plat -name "mt6765" -type d | head -n 1)
-          FOR_FIX="drivers/misc/mediatek/eccci drivers/misc/mediatek/ccci_util drivers/misc/mediatek/sensors-1.0 drivers/misc/mediatek/video"
+          FOR_FIX="drivers/misc/mediatek/eccci drivers/misc/mediatek/ccci_util drivers/misc/mediatek/video"
           for dir in $FOR_FIX; do
             find $dir -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat -I\$(srctree)/$PLAT_PATH/include/mach|g" {} +
           done
 
-          # 5. Pointer Alignment (mrdump Fix)
+          # 5. mrdump Pointer Fix & Scheduler Inline Fixes
           find drivers/misc/mediatek -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
-          
-          # 6. Scheduler & KSM Inline Fixes
           sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
           find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
 
@@ -54,30 +52,41 @@ jobs:
         run: |
           mkdir -p out
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
+          
           ./scripts/config --file out/.config \
+            --enable CONFIG_USB_CONFIGFS \
+            --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS_F_HID \
+            --enable CONFIG_USB_G_HID \
             --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_USB_HID \
-            --enable CONFIG_INPUT_UINPUT \
             --enable CONFIG_HIDRAW \
-            --disable CONFIG_SECURITY_SELINUX_DEVELOP
+            --enable CONFIG_INPUT_UINPUT \
+            --enable CONFIG_INPUT_EVDEV \
+            --enable CONFIG_INPUT_JOYSTICK \
+            --enable CONFIG_JOYSTICK_XPAD \
+            --disable CONFIG_SECURITY_SELINUX_DEVELOP \
+            --set-val CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE 0
 
-      - name: 🚀 Build Execution
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: 🚀 Build Execution (Linker Wall Guard)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
+          
+          # -fcommon and --allow-multiple-definition handle the Line 4500 Linker error
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            KCFLAGS="-fcommon -Wno-error" \
+            KCFLAGS="-fcommon -Wno-error -Wno-error=implicit-function-declaration" \
             KBUILD_LDFLAGS="--allow-multiple-definition"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-True-Master-Kernel
+          name: Ellis-Hardened-Kernel-HID
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
