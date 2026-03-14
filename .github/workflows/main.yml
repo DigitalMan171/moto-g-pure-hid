@@ -1,4 +1,4 @@
-name: "Ellis Pro-Build: Unified Ledger Protocol"
+name: "Ellis Pro-Build: Hardened Protocol"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -18,63 +18,58 @@ jobs:
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: 🧪 Surgical Driver & Header Fixes
+      - name: 🧪 Surgical Code Fixes
         run: |
-          # 1. CPUFreq Redefinition Fix
-          sed -i '/struct cpufreq_policy {/i #ifndef __CPUFREQ_POLICY_GUARD\n#define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
-          sed -i '/};/a #endif' include/linux/cpufreq.h
+          # 1. CPUFreq Guard (Simple 1st line injection to avoid sed syntax errors)
+          sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
+          sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
+          echo "#endif" >> include/linux/cpufreq.h
 
           # 2. Driver Visibility (Sensor-Hub, Video, ECCCI)
-          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
-          find drivers/misc/mediatek/video -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/video/include -I\$(srctree)/drivers/misc/mediatek/video/common/include|g" {} +
-          find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
-
-          # 3. Pointer Alignment (64-bit Fix) - Using a broader search to avoid "No such file"
-          PANIC_FILE=$(find . -name "mrdump_panic.c")
-          if [ ! -z "$PANIC_FILE" ]; then sed -i 's/(void \*)addr/(uintptr_t)addr/g' "$PANIC_FILE"; fi
+          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
+          find drivers/misc/mediatek/video -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/video/include -I\$(srctree)/drivers/misc/mediatek/video/common/include|g" {} +
           
-          # 4. Compiler Strictness (Inline Fix)
+          # 3. Pointer Alignment (64-bit mrdump Fix)
+          find . -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
+          
+          # 4. Compiler Strictness (Inline Removal)
           find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
+          sed -i 's/static inline void uclamp_se_set/static void uclamp_se_set/g' kernel/sched/cpufreq_schedutil.c || true
 
-      - name: 🛡️ Apply HID & Security (Base + Fragment Merge)
+      - name: 🛡️ Apply HID & Security Configuration
         run: |
-          # Define the Base and Fragment paths
-          BASE_CONF="k65v1_64_bsp_defconfig"
-          FRAG_CONF=$(find arch/arm64/configs -name "ellis*.config" | head -n 1)
-          
-          # If fragment is not found, we use the base and inject manually
-          FINAL_CONF="out/.config"
           mkdir -p out
+          # Generate base config
+          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
           
-          make O=out ARCH=arm64 $BASE_CONF
-          
-          # Inject HID & Security Mastery
-          scripts/config --file out/.config \
+          # Inject HID Master Flags (Keyboard/Mouse/Joystick)
+          ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HID_GENERIC \
             --enable CONFIG_USB_HID \
             --enable CONFIG_INPUT_UINPUT \
             --enable CONFIG_HIDRAW \
-            --disable CONFIG_SECURITY_SELINUX_DEVELOP \
-            --enable CONFIG_USB_CONFIGFS_F_FS
-          
-          # The "Group Fix" Linker Logic
-          echo "KBUILD_LDFLAGS=--allow-multiple-definition" >> $GITHUB_ENV
-          echo "KCFLAGS=-fcommon -Wno-error" >> $GITHUB_ENV
+            --enable CONFIG_USB_CONFIGFS_F_FS \
+            --disable CONFIG_SECURITY_SELINUX_DEVELOP
 
-      - name: 🚀 Build Execution (Fixed Output-Sync)
+      - name: 🚀 Build Execution (Safe Delivery)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
-          unset MAKEFLAGS # Prevents the "unknown output-sync type '2'" error
+          unset MAKEFLAGS
           
-          ARGS="ARCH=arm64 O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- KCFLAGS='${{ env.KCFLAGS }}' KBUILD_LDFLAGS='${{ env.KBUILD_LDFLAGS }}'"
-          
-          make -j$(nproc) $ARGS
+          # Direct variable passing to avoid shell quoting errors
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            KCFLAGS="-fcommon -Wno-error" \
+            KBUILD_LDFLAGS="--allow-multiple-definition"
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-Kernel
+          name: Ellis-HID-Master-Build
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
