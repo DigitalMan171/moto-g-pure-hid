@@ -1,4 +1,4 @@
-name: "Ellis Pro-Build: Hardened Protocol"
+name: "Ellis Pro-Build: Final Visibility Protocol"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -18,17 +18,20 @@ jobs:
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: 🧪 Surgical Code Fixes
+      - name: 🧪 Surgical Driver & Header Fixes
         run: |
-          # 1. CPUFreq Guard (Simple 1st line injection to avoid sed syntax errors)
+          # 1. CPUFreq Guard
           sed -i '1i #ifndef __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           sed -i '2i #define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           echo "#endif" >> include/linux/cpufreq.h
 
-          # 2. Driver Visibility (Sensor-Hub, Video, ECCCI)
-          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
-          find drivers/misc/mediatek/video -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/video/include -I\$(srctree)/drivers/misc/mediatek/video/common/include|g" {} +
-          
+          # 2. Master Visibility Injection (ECCCI, CCCI, Sensors, Video)
+          # We force these drivers to look into the mt-plat directory
+          FOR_FIX="drivers/misc/mediatek/eccci drivers/misc/mediatek/ccci_util drivers/misc/mediatek/sensors-1.0 drivers/misc/mediatek/video"
+          for dir in $FOR_FIX; do
+            find $dir -name "Makefile" -exec sed -i "s|drivers/misc/mediatek/include|drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/include/mt-plat|g" {} +
+          done
+
           # 3. Pointer Alignment (64-bit mrdump Fix)
           find . -name "mrdump_panic.c" -exec sed -i 's/(void \*)addr/(uintptr_t)addr/g' {} +
           
@@ -39,10 +42,8 @@ jobs:
       - name: 🛡️ Apply HID & Security Configuration
         run: |
           mkdir -p out
-          # Generate base config
           make O=out ARCH=arm64 k65v1_64_bsp_defconfig
           
-          # Inject HID Master Flags (Keyboard/Mouse/Joystick)
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HID_GENERIC \
@@ -52,12 +53,12 @@ jobs:
             --enable CONFIG_USB_CONFIGFS_F_FS \
             --disable CONFIG_SECURITY_SELINUX_DEVELOP
 
-      - name: 🚀 Build Execution (Safe Delivery)
+      - name: 🚀 Build Execution (Safe Variable Passing)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
           unset MAKEFLAGS
           
-          # Direct variable passing to avoid shell quoting errors
+          # We pass KCFLAGS and LDFLAGS directly here to bypass the shell-quoting bug
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -69,7 +70,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Master-Build
+          name: Ellis-Final-Kernel
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
