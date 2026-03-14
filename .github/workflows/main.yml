@@ -1,7 +1,5 @@
-name: "Ellis Pro-Build: HID-Master & Security-Bypass"
-on: 
-  push:
-  workflow_dispatch:
+name: "Ellis Pro-Build: Full Compatibility Master"
+on: [push, workflow_dispatch]
 
 jobs:
   build:
@@ -14,55 +12,68 @@ jobs:
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
-      - name: Toolchain Lock (LineageOS & AOSP)
+      - name: Sync Toolchains
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32 --depth=1
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc64 --depth=1
 
-      - name: Surgical Code Fixes (Morning Manifest)
+      - name: 🧪 Surgical Driver & Header Fixes
         run: |
-          # 1. ksm_flock 'inline' fix (Compiler Strictness)
-          find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
-          
-          # 2. CPUFreq Isolated Guard (MediaTek Redefinition Fix)
+          # 1. CPUFreq Redefinition Fix
           sed -i '/struct cpufreq_policy {/i #ifndef __CPUFREQ_POLICY_GUARD\n#define __CPUFREQ_POLICY_GUARD' include/linux/cpufreq.h
           sed -i '/};/a #endif' include/linux/cpufreq.h
 
-          # 3. mrdump_panic Pointer Alignment (64-bit Pointer Truncation Fix)
+          # 2. Sensor-Hub Header Visibility Fix
+          find drivers/misc/mediatek/sensors-1.0 -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/inc -I\$(srctree)/drivers/misc/mediatek/sensors-1.0/sensorHub/nanohub|g" {} +
+
+          # 3. Video & ECCCI Header Visibility Fix
+          find drivers/misc/mediatek/video -name "Makefile" -exec sed -i "s|-I\$(srctree)/drivers/misc/mediatek/include|-I\$(srctree)/drivers/misc/mediatek/include -I\$(srctree)/drivers/misc/mediatek/video/include -I\$(srctree)/drivers/misc/mediatek/video/common/include|g" {} +
+          find drivers/misc/mediatek/eccci -name "Makefile" -exec sed -i 's/-I$(srctree)\/drivers\/misc\/mediatek\/include/-I$(srctree)\/drivers\/misc\/mediatek\/include -I$(srctree)\/drivers\/misc\/mediatek\/include\/mt-plat/g' {} +
+
+          # 4. Pointer Alignment (64-bit Fix)
           sed -i 's/(void \*)addr/(uintptr_t)addr/g' drivers/misc/mediatek/mrdump/mrdump_panic.c || true
+          
+          # 5. Compiler Strictness (Inline Fix)
+          find . -name "ksm_flock.c" -exec sed -i 's/static inline/static/g' {} +
 
-      - name: Apply HID & Security Bypasses
+      - name: 🛡️ Apply HID & Security Bypasses
         run: |
-          CONF=arch/arm64/configs/ellis_defconfig
+          # DYNAMIC DEFCONFIG DISCOVERY
+          DEFCONFIG_PATH=$(find arch/arm64/configs -name "ellis_defconfig" | head -n 1)
+          if [ -z "$DEFCONFIG_PATH" ]; then echo "FATAL: ellis_defconfig not found"; exit 1; fi
+          echo "Found defconfig at: $DEFCONFIG_PATH"
           
-          # HID Functionality (Mouse/Keyboard Capability)
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_CONFIGFS_F_HID
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_HID_GENERIC
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_HID
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_INPUT_UINPUT
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_HIDRAW
+          # Inject HID & Security (Keyboard/Mouse Compatibility)
+          ARCH=arm64 scripts/config --file $DEFCONFIG_PATH \
+            --enable CONFIG_USB_CONFIGFS_F_HID \
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_USB_HID \
+            --enable CONFIG_INPUT_UINPUT \
+            --enable CONFIG_HIDRAW \
+            --disable CONFIG_SECURITY_SELINUX_DEVELOP \
+            --enable CONFIG_USB_CONFIGFS_F_FS
           
-          # Security Bypass (Permissive Mode & Mechanical Purity)
-          ARCH=arm64 scripts/config --file $CONF --disable CONFIG_SECURITY_SELINUX_DEVELOP
-          ARCH=arm64 scripts/config --file $CONF --enable CONFIG_USB_CONFIGFS_F_FS
-          
-          # Exporting Group Fix Flags
+          # Save found config name for the build step
+          echo "REAL_CONF=$(basename $DEFCONFIG_PATH)" >> $GITHUB_ENV
           echo "KBUILD_LDFLAGS=--allow-multiple-definition" >> $GITHUB_ENV
-          echo "KCFLAGS=-fcommon -Wno-error -O2" >> $GITHUB_ENV
+          echo "KCFLAGS=-fcommon -Wno-error" >> $GITHUB_ENV
 
-      - name: Build Execution (Nuclear Linker Protocol)
+      - name: 🚀 Build Execution (Fixed Output-Sync)
         run: |
           export PATH=$(pwd)/clang/bin:$(pwd)/gcc64/bin:$(pwd)/gcc32/bin:$PATH
+          # Clear MAKEFLAGS to resolve the "unknown output-sync type '2'" error
+          unset MAKEFLAGS
+          
           ARGS="ARCH=arm64 O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi- KCFLAGS='${{ env.KCFLAGS }}' KBUILD_LDFLAGS='${{ env.KBUILD_LDFLAGS }}'"
           
-          make $ARGS ellis_defconfig
+          make $ARGS ${{ env.REAL_CONF }}
           make -j$(nproc) $ARGS
 
-      - name: Package Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-ProBuild
+          name: Ellis-Final-Kernel
           path: |
             out/arch/arm64/boot/Image.gz
             out/arch/arm64/boot/dts/vendor/ellis*.dtb
