@@ -1,4 +1,4 @@
-name: Moto G Pure HID Kernel Build
+name: Moto G Pure HID Kernel Build - Final Fix Set
 
 on:
   workflow_dispatch:
@@ -8,10 +8,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Source
+    - name: Checkout Source with Submodules
       uses: actions/checkout@v4
+      with:
+        submodules: recursive  # FIX: Pulls the actual content into scripts/ and arch/
+        fetch-depth: 1
 
-    - name: Setup Environment
+    - name: Setup Build Environment
       run: |
         sudo apt-get update
         sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git
@@ -21,11 +24,12 @@ jobs:
         mkdir tc
         git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
         git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
-        echo "PATH=$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH" >> $GITHUB_ENV
+        echo "$GITHUB_WORKSPACE/tc/gcc64/bin" >> $GITHUB_PATH
+        echo "$GITHUB_WORKSPACE/tc/gcc32/bin" >> $GITHUB_PATH
 
     - name: Configure HID Drivers
       run: |
-        # Using Direct Verified Paths
+        # Submodules are synced; scripts/config is now accessible
         chmod +x scripts/config
         ./scripts/config --file arch/arm64/configs/vendor/ellis_defconfig \
           -e CONFIG_USB_G_HID \
@@ -36,12 +40,12 @@ jobs:
           -e CONFIG_HID_GENERIC \
           -e CONFIG_USB_CONFIGFS_UEVENT
         
-        # Immediate verification of the file write
-        grep "CONFIG_USB_F_HID" arch/arm64/configs/vendor/ellis_defconfig
+        echo "--- Verification: Flags successfully injected ---"
+        grep -E "CONFIG_USB_F_HID|CONFIG_HIDRAW" arch/arm64/configs/vendor/ellis_defconfig
 
     - name: Compile Kernel
       run: |
-        # MTK build requirement: O=out and vendor/ target
+        # Use the vendor prefix for the ellis MTK configuration merge
         make O=out ARCH=arm64 vendor/ellis_defconfig
         make -j$(nproc --all) O=out \
           ARCH=arm64 \
@@ -50,7 +54,7 @@ jobs:
           CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu-
 
-    - name: Export Image
+    - name: Export Image.gz-dtb
       uses: actions/upload-artifact@v4
       with:
         name: Image-ellis-HID
