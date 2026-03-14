@@ -25,6 +25,7 @@ jobs:
 
     - name: Configure HID Drivers
       run: |
+        # Using Direct Verified Paths
         chmod +x scripts/config
         ./scripts/config --file arch/arm64/configs/vendor/ellis_defconfig \
           -e CONFIG_USB_G_HID \
@@ -35,12 +36,12 @@ jobs:
           -e CONFIG_HID_GENERIC \
           -e CONFIG_USB_CONFIGFS_UEVENT
         
-        echo "Verifying Flags in Vendor Config:"
-        grep -E "CONFIG_USB_F_HID|CONFIG_HIDRAW" arch/arm64/configs/vendor/ellis_defconfig
+        # Immediate verification of the file write
+        grep "CONFIG_USB_F_HID" arch/arm64/configs/vendor/ellis_defconfig
 
     - name: Compile Kernel
       run: |
-        # MediaTek builds require O=out and the vendor/ prefix
+        # MTK build requirement: O=out and vendor/ target
         make O=out ARCH=arm64 vendor/ellis_defconfig
         make -j$(nproc --all) O=out \
           ARCH=arm64 \
