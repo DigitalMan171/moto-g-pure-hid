@@ -1,4 +1,4 @@
-name: "Ellis: Targeted Hardware Alignment V4.1"
+name: "Ellis: Manufacturer Driver Protocol V4.2"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,33 +23,25 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Hardware Path Logic)
+      - name: 🛡️ The Master Conversation (Driver Flags & Sensor Init)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # 1. Fix legacy 'inline' behavior for MediaTek drivers
+          # Fix for legacy inline logic (Required for compilation)
           echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
           
-          # 2. Path Repair: Escaping the mt6765 subfolder (The Double Jump)
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common/..\/..\/common/g' {} +
-          
-          # 3. Sub-folder Alignment (Based on Audit: Rear=v1_1, Front=v1)
-          # First, assume everything is v1_1
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/common\/v1/common\/v1_1/g' {} +
-          # Then, redirect s5k5e8yx back to v1
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/v1_1\/s5k5e8yx/v1\/s5k5e8yx/g' {} +
-
+          # Use scripts/config to enable the manufacturer camera stack
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
-            --enable CONFIG_MTK_NANOHUB \
-            --enable CONFIG_MTK_SENSOR_SUPPORT \
-            --enable CONFIG_MTK_BMI160_I2C \
+            --enable CONFIG_MTK_IMGSENSOR \
+            --enable CONFIG_MTK_IMGSENSOR_COMMON_V1_1 \
+            --enable CONFIG_MTK_CAM_GENERIC \
             --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
@@ -58,7 +50,7 @@ jobs:
           
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build (Flag & Variable Guided)
+      - name: 🚀 Execute Build
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -68,9 +60,10 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # Silence host-side OpenSSL noise to keep the log readable
+          # Silence host-side noise for a cleaner log
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           
+          # Native Environment Variables
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
@@ -80,5 +73,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V4.1
+          name: Ellis-Kernel-V4.2
           path: source/out/arch/arm64/boot/Image.gz
