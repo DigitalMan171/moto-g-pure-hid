@@ -1,4 +1,4 @@
-name: "Ellis: Golden Build Protocol V3.3"
+name: "Ellis: Base Hardware Test V3.6"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,63 +23,11 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (V1_1 Alignment)
+      - name: 🛡️ The Master Conversation (Hardware Discovery Run)
         working-directory: source
         run: |
-          # Audit specifically for any front camera sensors starting with 's5k'
-          echo "--- RE-AUDITING FRONT SENSOR ---"
-          find drivers/misc/mediatek/imgsensor -name "s5k5*" -type d || echo "s5k5e9 not found"
-          echo "--- END AUDIT ---"
-
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # THE FIX: Pointing legacy 'v1' to the actual 'v1_1' folder
-          # We also keep the 'v1' fallback just in case some drivers use it
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1\//..\/..\/common\/v1_1\//g' {} +
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1_1\/s5k3l6/..\/..\/common\/v1\/s5k3l6/g' {} +
-          
-          ./scripts/config --file out/.config \
-            --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_USB_CONFIGFS_F_HID \
-            --enable CONFIG_HIDRAW \
-            --enable CONFIG_INPUT_UINPUT \
-            --enable CONFIG_MTK_NANOHUB \
-            --enable CONFIG_MTK_SENSOR_SUPPORT \
-            --enable CONFIG_MTK_BMI160_I2C \
-            --enable CONFIG_VIDEO_MEDIATEK_V4L2 \
-            --enable CONFIG_MTK_MMSYS \
-            --enable CONFIG_MTK_IOMMU \
-            --enable CONFIG_MTK_CMDQ \
-            --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
-            --enable CONFIG_FINGERPRINT_GOODIX \
-            # Temporarily using ONLY the rear sensor we found to see if it compiles
-            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw" \
-            --disable CONFIG_WERROR \
-            --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
-            --disable CONFIG_BLK_INLINE_ENCRYPTION \
-            --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
-          
-          make O=out olddefconfig
-          
-      - name: 🚀 Execute Build
-        working-directory: source
-        run: |
-          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-none-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CC=clang
-          export MTK_PLATFORM=mt6765
-          export MTK_PROJECT=k65v1_64_bsp
-          export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration -Wno-error=pointer-to-int-cast"
-          
-          make -j$(nproc) O=out
-
-      - name: 📦 Upload Final Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: Ellis-Kernel-V3.3
-          path: source/out/arch/arm64/boot/Image.gz
+          #
