@@ -1,4 +1,4 @@
-name: "Ellis: Path Fix Build V3.7"
+name: "Ellis: Official Build V3.8"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,56 +23,40 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Surgical Path Alignment)
+      - name: 🛡️ The Master Conversation (Official Hardware Config)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
+          
+          # Initialize the board configuration
           make O=out k65v1_64_bsp_defconfig
           
-          # 🛠️ SURGICAL PATH REPAIR
-          # 1. Fixes the rear sensor path (pointing from ghost 'v1' to actual 'v1_1')
-          # 2. Ensures the double-jump '../..' escapes the platform subfolder
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1_1/..\/..\/common\/v1_1/g' {} +
-          find drivers/misc/mediatek/imgsensor -name "Makefile" -exec sed -i 's/\.\.\/common\/v1/..\/..\/common\/v1/g' {} +
-          
+          # Use the official manufacturer tool to set Ellis sensor values
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
             --enable CONFIG_MTK_NANOHUB \
-            --enable CONFIG_MTK_I2C \
-            --enable CONFIG_MTK_LCM \
             --enable CONFIG_MTK_SENSOR_SUPPORT \
-            --enable CONFIG_MTK_AUTO_DETECT_ACCELEROMETER \
             --enable CONFIG_MTK_BMI160_I2C \
             --enable CONFIG_VIDEO_MEDIATEK_V4L2 \
             --enable CONFIG_MTK_MMSYS \
             --enable CONFIG_MTK_IOMMU \
             --enable CONFIG_MTK_CMDQ \
-            --enable CONFIG_TRUSTY \
-            --enable CONFIG_TOUCH_INTERFACE \
             --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
             --enable CONFIG_FINGERPRINT_GOODIX \
-            --enable CONFIG_MTK_ROUND_CORNER \
-            --set-val CONFIG_MTK_GAUGE_VERSION 30 \
-            --set-val CONFIG_MTK_COMPOSITE_VER 2 \
             --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
-            --disable CONFIG_MTK_ACCEL_LIS2HH12 \
-            --disable CONFIG_TOUCHSCREEN_HIMAX_INCELL \
-            --disable CONFIG_USB_G_ANDROID \
-            --disable CONFIG_ANDROID_PARANOID_NETWORK \
-            --disable CONFIG_UCLAMP_TASK \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
           
-          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
+          # Finalize config
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build
+      - name: 🚀 Execute Build (Manufacturer Flow)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -81,14 +65,20 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
+          
+          # 🔑 THE MANUFACTURER KEY:
+          # These variables allow the imgsensor drivers to find their own paths
+          # based on the mt6765 architecture and k65v1 project ID.
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
-          export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration -Wno-error=pointer-to-int-cast"
+          export MTK_PLATFORM_DIR=mt6765
+          export MTK_PROJECT_DIR=k65v1_64_bsp
           
+          # Build with all processors
           make -j$(nproc) O=out
 
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V3.7
+          name: Ellis-Kernel-V3.8
           path: source/out/arch/arm64/boot/Image.gz
