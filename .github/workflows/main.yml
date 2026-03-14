@@ -1,4 +1,4 @@
-name: "Ellis: Official Build V3.8"
+name: "Ellis: Flag-Guided Official V3.9"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -23,16 +23,17 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf gcc32
 
-      - name: 🛡️ The Master Conversation (Official Hardware Config)
+      - name: 🛡️ The Master Conversation (Inline & Flag Setup)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
-          
-          # Initialize the board configuration
           make O=out k65v1_64_bsp_defconfig
           
-          # Use the official manufacturer tool to set Ellis sensor values
+          # Fix for legacy inline code (Crucial for MediaTek/Clang compatibility)
+          echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
+          
+          # Official config using confirmed hardware strings
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -41,19 +42,12 @@ jobs:
             --enable CONFIG_MTK_NANOHUB \
             --enable CONFIG_MTK_SENSOR_SUPPORT \
             --enable CONFIG_MTK_BMI160_I2C \
-            --enable CONFIG_VIDEO_MEDIATEK_V4L2 \
-            --enable CONFIG_MTK_MMSYS \
-            --enable CONFIG_MTK_IOMMU \
-            --enable CONFIG_MTK_CMDQ \
-            --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
-            --enable CONFIG_FINGERPRINT_GOODIX \
             --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
             --disable CONFIG_WERROR \
             --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
           
-          # Finalize config
           make O=out olddefconfig
 
       - name: 🚀 Execute Build (Manufacturer Flow)
@@ -66,19 +60,18 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # 🔑 THE MANUFACTURER KEY:
-          # These variables allow the imgsensor drivers to find their own paths
-          # based on the mt6765 architecture and k65v1 project ID.
+          # Manufacturer Environment Variables for Path Resolution
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           export MTK_PLATFORM_DIR=mt6765
-          export MTK_PROJECT_DIR=k65v1_64_bsp
           
-          # Build with all processors
+          # -fcommon allows duplicate global definitions often found in MTK drivers
+          export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
+          
           make -j$(nproc) O=out
 
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V3.8
+          name: Ellis-Kernel-V3.9
           path: source/out/arch/arm64/boot/Image.gz
