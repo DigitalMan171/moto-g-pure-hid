@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V6.4"
+name: "Ellis: Official Protocol Build V6.7"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -9,18 +9,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
-          
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libncurses5_6.3-2ubuntu0.1_amd64.deb
           rm *.deb
 
-      - name: 🌐 Clone Official Motorola Source & Toolchains
+      - name: 🌐 Sync Official Source & Toolchains
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
+          # Official ARM GNU Toolchains
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
@@ -29,29 +29,32 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Ellis Unified Configuration (V6.4)
+      - name: 🛡️ Ellis Config Protocol
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
+          # Step 1: Load Manufacturer Baseline
           make O=out k65v1_64_bsp_defconfig
           
-          # Cleaned command - no comments inside the backslash-continued lines
+          # Step 2: Protocol-compliant adjustments for open-source gaps
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
+            --disable CONFIG_WEXT_PRIV \
+            --disable CONFIG_WEXT_CORE \
+            --disable CONFIG_MTK_AEE_FEATURE \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK \
-            --disable CONFIG_MTK_AEE_MRDUMP \
-            --disable CONFIG_MTK_AEE_FEATURE \
-            --disable CONFIG_UCLAMP_TASK \
+            --disable CONFIG_MTK_MMC_CD_GPIO \
             --disable CONFIG_WERROR
           
+          # Step 3: Finalize Config
           make O=out olddefconfig
 
-      - name: 🚀 Official Compile (Syntax Verified)
+      - name: 🚀 Official Build Execution
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -60,20 +63,20 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
-          export MTK_PLATFORM=mt6765
-          export MTK_PROJECT=k65v1_64_bsp
           
-          export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error -Wno-implicit-function-declaration -Wno-format -Wno-format-security"
-          export HOSTCFLAGS="-Wno-deprecated-declarations"
+          # Protocol-standard environment flags
+          export KCFLAGS="-fcommon -fgnu89-inline -w -Wno-error"
+          export HOSTCFLAGS="-w"
           
+          # Build ensuring no re-enabling of broken features
           make -j$(nproc) O=out \
             KBUILD_WERROR=0 \
             CONFIG_MTK_AEE_FEATURE=n \
             CONFIG_WEXT_PRIV=n \
             CONFIG_BLK_INLINE_ENCRYPTION=n
 
-      - name: 📦 Upload Final Image
+      - name: 📦 Artifact Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-Unified-V6.4
+          name: Ellis-Kernel-Official-V6.7
           path: source/out/arch/arm64/boot/Image.gz
