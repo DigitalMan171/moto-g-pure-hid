@@ -1,14 +1,23 @@
-name: "Ellis: Pure Configuration Protocol V5.0"
+name: "Ellis: Pure Configuration Protocol V5.1"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Environment Setup
+      - name: 📦 Environment Setup (Legacy Library Bridge)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
+          # Install standard modern dependencies
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
+          
+          # MANUALLY INSTALL LIBNCURSES5 (Required for Ubuntu 24.04 runners)
+          # We fetch these from the Ubuntu 22.04 (Jammy) security archive
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
+          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          sudo dpkg -i libncurses5_6.3-2ubuntu0.1_amd64.deb
+          rm *.deb
 
       - name: 🌐 Clone Source & Toolchains
         run: |
@@ -35,7 +44,6 @@ jobs:
           make O=out k65v1_64_bsp_defconfig
           
           # 2. Driver Toggles (Ellis-Only commands)
-          # We enable the HID and Camera logic strictly through symbols.
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -48,7 +56,7 @@ jobs:
             --enable CONFIG_FINGERPRINT_GOODIX \
             --disable CONFIG_WERROR
           
-          # 3. Finalize the .config without touching any source files
+          # 3. Finalize without touching source
           make O=out olddefconfig
 
       - name: 🚀 Execute Build (Build-File & Environment Context)
@@ -61,11 +69,10 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # Standard Build Variables required by the MediaTek Build Files
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # Host/Compiler flags passed to the environment to handle legacy logic
+          # Host/Compiler flags remain in environment only
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error=implicit-function-declaration"
           
@@ -74,5 +81,5 @@ jobs:
       - name: 📦 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.0
+          name: Ellis-Kernel-V5.1
           path: source/out/arch/arm64/boot/Image.gz
