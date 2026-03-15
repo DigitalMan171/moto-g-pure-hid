@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.6.6"
+name: "Ellis: Official Open-Source Build V5.6.7"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -22,7 +22,6 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Official ARM GNU Toolchains
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
@@ -31,7 +30,7 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ Ellis Protocol Config (V5.6.6)
+      - name: 🛡️ Ellis Protocol Config (V5.6.7)
         working-directory: source
         run: |
           mkdir -p out
@@ -65,15 +64,15 @@ jobs:
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # CLANG_FLAGS: Targeted specifically at the LLVM/Clang compiler
-          # Resolves the format mangling at Line 3833 without affecting GCC scripts
-          export CLANG_FLAGS="-mno-android -Wno-format -Wno-format-security"
+          # CLANG SPECIFIC: Isolates Clang-only flags from the GCC build scripts
+          export CLANG_FLAGS="-mno-android"
           
-          # KCFLAGS: Global flags safe for both GCC and Clang
-          export KCFLAGS="-fcommon -fgnu89-inline -Wno-error"
+          # GLOBAL OVERRIDE (KCFLAGS): 
+          # Processed last. Forces both Clang and GCC to ignore missing string typos in PBM.
+          export KCFLAGS="-fcommon -fgnu89-inline -Wno-format -Wno-format-security -Wno-error"
           export HOSTCFLAGS="-w"
           
-          # Passing CLANG_FLAGS as a make argument ensures the Makefile picks them up correctly
+          # Pass KBUILD_WERROR=0 directly to override nested MediaTek Makefiles
           make -j$(nproc) O=out \
             KBUILD_WERROR=0 \
             CLANG_FLAGS="$CLANG_FLAGS" \
@@ -84,5 +83,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.6.6
+          name: Ellis-Kernel-V5.6.7
           path: source/out/arch/arm64/boot/Image.gz
