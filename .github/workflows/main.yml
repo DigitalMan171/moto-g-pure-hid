@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.8.1"
+name: "Ellis: Official Open-Source Build V5.8.2"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -37,29 +37,30 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
 
-          # 1. INITIALIZE (Motorola Factory Step)
-          # We run this first to let the system generate its 'clean' config.
+          # 1. INITIALIZE (The Factory Step)
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. JUST-IN-TIME PATCHING (Bypasses Factory Discard)
-          # Global AEE Linker Stubs (Fixes Sound Driver Link Errors)
-          echo 'void aee_kernel_exception_api_func(void *s, ...) {}' >> init/main.c
-          echo 'void aee_kernel_warning_api_func(void *s, ...) {}' >> init/main.c
-          echo 'void aee_kernel_remoter_api_func(void *s, ...) {}' >> init/main.c
-          echo 'int aee_kernel_dal_show(void *s) { return 0; }' >> init/main.c
+          # 2. JIT PATCHING (Top-Down Injection)
+          # We insert at the VERY TOP of the files to avoid breaking existing logic.
+          
+          # Global Linker Stubs (init/main.c)
+          sed -i '1i void aee_kernel_exception_api_func(void *s, ...) {}' init/main.c
+          sed -i '1i void aee_kernel_warning_api_func(void *s, ...) {}' init/main.c
+          sed -i '1i void aee_kernel_remoter_api_func(void *s, ...) {}' init/main.c
+          sed -i '1i int aee_kernel_dal_show(void *s) { return 0; }' init/main.c
 
-          # Core System Fixes (De-inlining and Battery Structs)
-          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
+          # Core System Fixes (De-inlining)
           sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
           
-          # Motorola Specific Charging Linker Fixes
-          echo 'struct moto_chg_tcmd_client;' >> drivers/power/supply/mtk_battery.c
-          echo 'int moto_chg_tcmd_register(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
-          echo 'int moto_chg_tcmd_unregister(struct moto_chg_tcmd_client *client) { return 0; }' >> drivers/power/supply/mtk_battery.c
+          # Motorola Battery & Charging Stubs
+          sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
+          sed -i '1i struct moto_chg_tcmd_client;' drivers/power/supply/mtk_battery.c
+          sed -i '1i int moto_chg_tcmd_register(void *client) { return 0; }' drivers/power/supply/mtk_battery.c
+          sed -i '1i int moto_chg_tcmd_unregister(void *client) { return 0; }' drivers/power/supply/mtk_battery.c
 
-          # 3. CONFIGURE (Inject HID Support & Disable AEE)
+          # 3. CONFIGURE (HID Support & AEE Suppression)
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -83,7 +84,6 @@ jobs:
       - name: 🔗 Create Ellis Image.gz-dtb
         working-directory: source
         run: |
-          # Use the verified Ellis hardware map
           DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
           if [ -z "$DTB_FILE" ]; then
             DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" | head -n 1)
@@ -93,5 +93,5 @@ jobs:
       - name: 📦 Upload Final Image Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-V5.8.1
+          name: Ellis-HID-Kernel-V5.8.2
           path: source/out/arch/arm64/boot/Image.gz-dtb
