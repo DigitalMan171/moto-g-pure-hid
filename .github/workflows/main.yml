@@ -1,65 +1,62 @@
-name: "Ellis: Pure Configuration Protocol V5.1"
+name: "Ellis: Official Open-Source Build V5.3"
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 📦 Environment Setup (Legacy Library Bridge)
+      - name: 📦 Environment Setup
         run: |
           sudo apt-get update
-          # Install standard modern dependencies
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
           
-          # MANUALLY INSTALL LIBNCURSES5 (Required for Ubuntu 24.04 runners)
-          # We fetch these from the Ubuntu 22.04 (Jammy) security archive
+          # Fix for legacy toolchains on Ubuntu 24.04
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libncurses5_6.3-2ubuntu0.1_amd64.deb
           rm *.deb
 
-      - name: 🌐 Clone Source & Toolchains
+      - name: 🌐 Clone Official Motorola Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # GCC 64-bit Toolchain
+          # Fetch Toolchains (Official ARM Releases)
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
           
-          # GCC 32-bit Toolchain
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Ellis Append-Only Configuration
+      - name: 🛡️ Ellis Append (Official Motorola Handshake)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           
-          # 1. Load the Base Ellis File
+          # LOAD THE INTENDED DEFCONFIG
+          # This is the 'Ellis' baseline Motorola uses for this device
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. Driver Toggles (Ellis-Only commands)
+          # MOTOROLA OPEN-SOURCE RULES: 
+          # We only append drivers that are not in the stock list
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
+            --disable CONFIG_UCLAMP_TASK \
             --enable CONFIG_MTK_IMGSENSOR \
             --enable CONFIG_MTK_IMGSENSOR_COMMON_V1_1 \
             --enable CONFIG_MTK_CAM_GENERIC \
-            --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
-            --enable CONFIG_FINGERPRINT_GOODIX \
             --disable CONFIG_WERROR
           
-          # 3. Finalize without touching source
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build (Build-File & Environment Context)
+      - name: 🚀 Official Compile Phase
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -69,17 +66,19 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
+          # MANDATORY MOTOROLA PROJECT FLAGS
+          # These tell the build system to use the open-source driver paths
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # Host/Compiler flags remain in environment only
-          export HOSTCFLAGS="-Wno-deprecated-declarations"
+          # INJECTING OPEN-SOURCE LOGIC (Bypasses Makefile edits)
           export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error=implicit-function-declaration"
+          export HOSTCFLAGS="-Wno-deprecated-declarations"
           
           make -j$(nproc) O=out
 
-      - name: 📦 Upload Artifact
+      - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.1
+          name: Ellis-Kernel-Official-OS
           path: source/out/arch/arm64/boot/Image.gz
