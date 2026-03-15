@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.6.5"
+name: "Ellis: Official Open-Source Build V5.6.6"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -9,6 +9,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
+          
+          # Fix for legacy toolchains
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
@@ -29,7 +31,7 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ Ellis Configuration (V5.6.5)
+      - name: 🛡️ Ellis Protocol Config (V5.6.6)
         working-directory: source
         run: |
           mkdir -p out
@@ -51,7 +53,7 @@ jobs:
           
           make O=out olddefconfig
 
-      - name: 🚀 Motorola Official Build Execution
+      - name: 🚀 Official Motorola Build Execution
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -63,13 +65,18 @@ jobs:
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # COMPATIBILITY FLAGS: -mno-android resolves the format-string mangling in PBM
-          export KCFLAGS="-fcommon -fgnu89-inline -mno-android -Wno-format -Wno-format-security -Wno-error"
+          # CLANG_FLAGS: Targeted specifically at the LLVM/Clang compiler
+          # Resolves the format mangling at Line 3833 without affecting GCC scripts
+          export CLANG_FLAGS="-mno-android -Wno-format -Wno-format-security"
+          
+          # KCFLAGS: Global flags safe for both GCC and Clang
+          export KCFLAGS="-fcommon -fgnu89-inline -Wno-error"
           export HOSTCFLAGS="-w"
           
-          # Pass KBUILD_WERROR=0 as a direct argument to override nested Makefiles
+          # Passing CLANG_FLAGS as a make argument ensures the Makefile picks them up correctly
           make -j$(nproc) O=out \
             KBUILD_WERROR=0 \
+            CLANG_FLAGS="$CLANG_FLAGS" \
             CONFIG_MTK_AEE_FEATURE=n \
             CONFIG_MTK_MMC_CD_GPIO=n \
             CONFIG_MTK_EMMC_CQHCI=n
@@ -77,5 +84,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.6.5
+          name: Ellis-Kernel-V5.6.6
           path: source/out/arch/arm64/boot/Image.gz
