@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.7.6"
+name: "Ellis: Official Open-Source Build V5.7.7"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -9,8 +9,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
-          
-          # Legacy ncurses support for older toolchain compatibility
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
@@ -22,7 +20,7 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Official ARM GNU Toolchains for AArch64 and ARM32
+          # Cross-compilers (GCC 10.3)
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
@@ -31,14 +29,13 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ Ellis Protocol Config (V5.7.6)
+      - name: 🛡️ Ellis Protocol Config (V5.7.7)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # Ellis Config Modifications (Enabling HID and disabling specific MTK blockers)
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -47,8 +44,6 @@ jobs:
             --disable CONFIG_UCLAMP_TASK \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_MTK_AEE_FEATURE \
-            --disable CONFIG_MTK_MMC_CD_GPIO \
-            --disable CONFIG_MTK_EMMC_CQHCI \
             --disable CONFIG_WERROR
           
           make O=out olddefconfig
@@ -56,38 +51,34 @@ jobs:
       - name: 🚀 Official Motorola Build Execution
         working-directory: source
         run: |
-          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
+          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:../gcc32/bin:$PATH
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # IMPLICIT FIXES: Promoted to global flags to solve 'videox' linking.
-          # -fno-section-anchors prevents symbol grouping that breaks MTK's archive rules.
-          # -fno-plt ensures procedure linkage tables don't interfere with static kernel archives.
-          EXTRA_CFLAGS="-fcommon -fno-pic -fno-section-anchors -fno-plt -w -Wno-everything -Wno-error"
+          # TEE & VIDEO SHIELD: 
+          # -fno-builtin-bcmp: Prevents Trustonic TEE string comparison crashes.
+          # -fno-section-anchors: Ensures ddp_ovl and videox memory offsets stay flat.
+          EXTRA_CFLAGS="-fcommon -fno-pic -fno-section-anchors -fno-plt -fno-builtin-bcmp -w -Wno-everything"
           
-          # TOOLCHAIN PROMOTION: Explicitly defining binary paths within the 'make' call.
-          # This forces all sub-makefiles to use the GNU toolset for archiving (AR) 
-          # and linking (LD), replicating the logic of your previous successful build.
+          # LD_FLAGS: Allows the linker to skip non-critical warnings during the AR stage.
+          EXTRA_LDFLAGS="--no-fatal-warnings"
+
           make -j$(nproc) O=out \
             AR=aarch64-none-linux-gnu-ar \
             NM=aarch64-none-linux-gnu-nm \
             LD=aarch64-none-linux-gnu-ld \
-            OBJCOPY=aarch64-none-linux-gnu-objcopy \
-            OBJDUMP=aarch64-none-linux-gnu-objdump \
-            STRIP=aarch64-none-linux-gnu-strip \
+            LDFLAGS="$EXTRA_LDFLAGS" \
             KBUILD_WERROR=0 \
             CLANG_FLAGS="-mno-android" \
             KCFLAGS="$EXTRA_CFLAGS" \
             KAFLAGS="$EXTRA_CFLAGS" \
-            CONFIG_MTK_AEE_FEATURE=n \
-            CONFIG_MTK_MMC_CD_GPIO=n \
-            CONFIG_MTK_EMMC_CQHCI=n
+            CONFIG_MTK_AEE_FEATURE=n
 
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.7.6
+          name: Ellis-Kernel-V5.7.7
           path: source/out/arch/arm64/boot/Image.gz
