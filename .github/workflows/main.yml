@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.8.2"
+name: "Ellis: Official Open-Source Build V5.8.3"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -20,14 +20,23 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # GCC 10.3 Toolchains
+          # GCC 10.3 Cross-Compilers
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz && mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
           
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz && mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🚀 Factory-Aligned Build & Patch Run
+      - name: 🧪 Early Stage Patches (Header Fixes)
+        working-directory: source
+        run: |
+          # De-inline functions in core Linux headers to prevent Clang 'always_inline' errors.
+          # These files are rarely touched by factory reset scripts.
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
+          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
+
+      - name: 🚀 Factory-Aligned Build & JIT Patching
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -37,30 +46,24 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
 
-          # 1. INITIALIZE (The Factory Step)
+          # 1. INITIALIZE (Motorola Factory Step)
+          # Generates the out/.config based on the Ellis (k65v1) platform.
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. JIT PATCHING (Top-Down Injection)
-          # We insert at the VERY TOP of the files to avoid breaking existing logic.
+          # 2. SURGICAL JIT PATCHING (Driver Space Injection)
+          # Moving AEE stubs into the driver directory adheres to MTK's vendor structure.
+          # We use '1i' to insert at the top of mtk_battery.c for linker visibility.
+          sed -i '1i void aee_kernel_exception_api_func(void *s, ...) {}' drivers/power/supply/mtk_battery.c
+          sed -i '1i void aee_kernel_warning_api_func(void *s, ...) {}' drivers/power/supply/mtk_battery.c
+          sed -i '1i void aee_kernel_remoter_api_func(void *s, ...) {}' drivers/power/supply/mtk_battery.c
+          sed -i '1i int aee_kernel_dal_show(void *s) { return 0; }' drivers/power/supply/mtk_battery.c
           
-          # Global Linker Stubs (init/main.c)
-          sed -i '1i void aee_kernel_exception_api_func(void *s, ...) {}' init/main.c
-          sed -i '1i void aee_kernel_warning_api_func(void *s, ...) {}' init/main.c
-          sed -i '1i void aee_kernel_remoter_api_func(void *s, ...) {}' init/main.c
-          sed -i '1i int aee_kernel_dal_show(void *s) { return 0; }' init/main.c
-
-          # Core System Fixes (De-inlining)
-          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
-          sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
-          
-          # Motorola Battery & Charging Stubs
+          # Motorola-specific Charging and Battery Table patches
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
-          sed -i '1i struct moto_chg_tcmd_client;' drivers/power/supply/mtk_battery.c
           sed -i '1i int moto_chg_tcmd_register(void *client) { return 0; }' drivers/power/supply/mtk_battery.c
           sed -i '1i int moto_chg_tcmd_unregister(void *client) { return 0; }' drivers/power/supply/mtk_battery.c
 
-          # 3. CONFIGURE (HID Support & AEE Suppression)
+          # 3. CONFIGURE HID & LIGHTWEIGHT PARAMS
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -72,7 +75,7 @@ jobs:
           
           make O=out olddefconfig
 
-          # 4. FINAL COMPILATION
+          # 4. FINAL COMPILATION (Building vmlinux & Image.gz)
           make -j$(nproc) O=out \
             AR=aarch64-none-linux-gnu-ar \
             NM=aarch64-none-linux-gnu-nm \
@@ -84,14 +87,12 @@ jobs:
       - name: 🔗 Create Ellis Image.gz-dtb
         working-directory: source
         run: |
+          # Concatenating kernel with the correct Ellis hardware map (Device Tree)
           DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          if [ -z "$DTB_FILE" ]; then
-            DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*.dtb" | head -n 1)
-          fi
           cat out/arch/arm64/boot/Image.gz "$DTB_FILE" > out/arch/arm64/boot/Image.gz-dtb
 
       - name: 📦 Upload Final Image Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-V5.8.2
+          name: Ellis-HID-Kernel-V5.8.3
           path: source/out/arch/arm64/boot/Image.gz-dtb
