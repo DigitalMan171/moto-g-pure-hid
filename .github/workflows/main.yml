@@ -1,4 +1,4 @@
-name: "Ellis: Master Hardware Protocol V4.7"
+name: "Ellis: Pure Configuration Protocol V5.0"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -8,8 +8,6 @@ jobs:
       - name: 📦 Environment Setup
         run: |
           sudo apt-get update
-          echo "deb http://security.ubuntu.com/ubuntu jammy-security main universe" | sudo tee /etc/apt/sources.list.d/jammy-security.list
-          sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
 
       - name: 🌐 Clone Source & Toolchains
@@ -17,41 +15,27 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # GCC 64-bit
+          # GCC 64-bit Toolchain
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
           
-          # GCC 32-bit
+          # GCC 32-bit Toolchain
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Master Handshake (Sanitize & Bridge)
+      - name: 🛡️ The Ellis Append-Only Configuration
         working-directory: source
         run: |
-          # 1. Clean the 'Ghost' characters (removes \r from Kconfigs)
-          find . -type f -name "Kconfig*" -exec sed -i 's/\r//' {} +
-          
-          # 2. Setup Build Directory
           mkdir -p out
           export ARCH=arm64
+          
+          # 1. Load the Base Ellis File
           make O=out k65v1_64_bsp_defconfig
           
-          # 3. Symlink: The 'v1' to 'v1_1' Bridge
-          cd drivers/misc/mediatek/imgsensor/src/common/
-          ln -sf v1_1 v1
-          cd ../../../../../
-          
-          # 4. Global Infrastructure: Fix the inline issue
-          # We check if file exists first to prevent 'No such file' error
-          if [ -f arch/arm64/Makefile ]; then
-            echo 'KBUILD_CFLAGS += -fgnu89-inline' >> arch/arm64/Makefile
-          else
-            echo "ERROR: arch/arm64/Makefile not found!" && exit 1
-          fi
-
-          # 5. Hardware Config
+          # 2. Driver Toggles (Ellis-Only commands)
+          # We enable the HID and Camera logic strictly through symbols.
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -60,19 +44,14 @@ jobs:
             --enable CONFIG_MTK_IMGSENSOR \
             --enable CONFIG_MTK_IMGSENSOR_COMMON_V1_1 \
             --enable CONFIG_MTK_CAM_GENERIC \
-            --set-str CONFIG_CUSTOM_KERNEL_IMGSENSOR "s5k4h7_mipi_raw s5k5e8yx_mipi_raw" \
-            --set-str CONFIG_MTK_PLATFORM_SENSOR "mt6765" \
             --enable CONFIG_TOUCHSCREEN_MTK_GOODIX_BERLIN \
-            --enable CONFIG_TOUCHSCREEN_GOODIX_BERLIN_I2C \
             --enable CONFIG_FINGERPRINT_GOODIX \
-            --enable CONFIG_MOTOROLA_FINGERPRINT \
-            --disable CONFIG_WERROR \
-            --enable CONFIG_CC_OPTIMIZE_FOR_SIZE \
-            --disable CONFIG_BLK_INLINE_ENCRYPTION
+            --disable CONFIG_WERROR
           
+          # 3. Finalize the .config without touching any source files
           make O=out olddefconfig
 
-      - name: 🚀 Execute Build
+      - name: 🚀 Execute Build (Build-File & Environment Context)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -81,16 +60,19 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-none-linux-gnueabihf-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
-          export HOSTCFLAGS="-Wno-deprecated-declarations"
           
+          # Standard Build Variables required by the MediaTek Build Files
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
-          export KCFLAGS="-fcommon -Wno-inline -Wno-error=implicit-function-declaration"
+          
+          # Host/Compiler flags passed to the environment to handle legacy logic
+          export HOSTCFLAGS="-Wno-deprecated-declarations"
+          export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error=implicit-function-declaration"
           
           make -j$(nproc) O=out
 
-      - name: 📦 Upload Final Image
+      - name: 📦 Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V4.7
+          name: Ellis-Kernel-V5.0
           path: source/out/arch/arm64/boot/Image.gz
