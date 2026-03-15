@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V6.3"
+name: "Ellis: Official Open-Source Build V6.4"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,7 +10,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
           
-          # Force compatibility for legacy Ncurses
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
@@ -22,7 +21,6 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Cross-Compilers (ARM64 & ARM32)
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
@@ -31,31 +29,29 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Ellis Unified Configuration (V6.3)
+      - name: 🛡️ The Ellis Unified Configuration (V6.4)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # 1. ENABLES: Your Project Requirements
+          # Cleaned command - no comments inside the backslash-continued lines
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_HIDRAW \
             --enable CONFIG_INPUT_UINPUT \
-            # 2. DISABLES: Bypassing "Missing Code" (Cannot be fixed by flags)
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK \
             --disable CONFIG_MTK_AEE_MRDUMP \
             --disable CONFIG_MTK_AEE_FEATURE \
             --disable CONFIG_UCLAMP_TASK \
-            # 3. SAFETY: Global Warning Logic
             --disable CONFIG_WERROR
           
           make O=out olddefconfig
 
-      - name: 🚀 Official Compile (Unified Bypass)
+      - name: 🚀 Official Compile (Syntax Verified)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -67,11 +63,9 @@ jobs:
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # THE KEY: Flags for Power Management (mtk_pbm) + Host Overrides
           export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error -Wno-implicit-function-declaration -Wno-format -Wno-format-security"
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           
-          # Final build with hard-overrides for Makefile 'sticky' flags
           make -j$(nproc) O=out \
             KBUILD_WERROR=0 \
             CONFIG_MTK_AEE_FEATURE=n \
@@ -81,5 +75,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-Unified-V6.3
+          name: Ellis-Kernel-Unified-V6.4
           path: source/out/arch/arm64/boot/Image.gz
