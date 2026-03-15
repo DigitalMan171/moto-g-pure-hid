@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.7"
+name: "Ellis: Official Open-Source Build V6.0"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,7 +10,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev
           
-          # Bridge legacy toolchain requirements
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
@@ -30,14 +29,13 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ The Ellis Append-Only Configuration
+      - name: 🛡️ The Ellis Hard-Override (V6.0)
         working-directory: source
         run: |
           mkdir -p out
           export ARCH=arm64
           make O=out k65v1_64_bsp_defconfig
           
-          # Applying the "Ellis Protocol" to satisfy manufacturer logic
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -50,10 +48,11 @@ jobs:
             --disable CONFIG_MTK_AEE_FEATURE \
             --disable CONFIG_MTK_AEE_IPANIC \
             --disable CONFIG_MTK_AEE_KDUMP \
+            --disable CONFIG_MTK_RAM_CONSOLE \
             --disable CONFIG_MTK_MMC_CD_GPIO \
             --disable CONFIG_MTK_EMMC_CQHCI \
             --disable CONFIG_WEXT_PRIV \
-            --disable CONFIG_GOLDFISH \
+            --disable CONFIG_WEXT_CORE \
             --enable CONFIG_MTK_IMGSENSOR \
             --enable CONFIG_MTK_IMGSENSOR_COMMON_V1_1 \
             --enable CONFIG_MTK_CAM_GENERIC \
@@ -61,7 +60,7 @@ jobs:
           
           make O=out olddefconfig
 
-      - name: 🚀 Official Compile & Log Generation
+      - name: 🚀 Official Compile (Direct Console Output)
         working-directory: source
         run: |
           export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
@@ -73,18 +72,18 @@ jobs:
           export MTK_PLATFORM=mt6765
           export MTK_PROJECT=k65v1_64_bsp
           
-          # Flags to bridge legacy code to modern compiler
           export KCFLAGS="-fcommon -fgnu89-inline -Wno-inline -Wno-error -Wno-implicit-function-declaration"
           export HOSTCFLAGS="-Wno-deprecated-declarations"
           
-          # Build and pipe output to a file for later parsing
-          make -j$(nproc) O=out 2>&1 | tee build_log.txt
+          make -j$(nproc) O=out \
+            CONFIG_MTK_AEE_FEATURE=n \
+            CONFIG_MTK_AEE_MRDUMP=n \
+            CONFIG_WEXT_PRIV=n \
+            CONFIG_WEXT_CORE=n \
+            CONFIG_MTK_RAM_CONSOLE=n
 
-      - name: 📦 Upload Artifacts (Image & Build Log)
-        if: always()
+      - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Build-Package-V5.7
-          path: |
-            source/out/arch/arm64/boot/Image.gz
-            source/build_log.txt
+          name: Ellis-Kernel-Final
+          path: source/out/arch/arm64/boot/Image.gz
