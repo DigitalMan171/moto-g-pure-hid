@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.7.2"
+name: "Ellis: Official Open-Source Build V5.7.4"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -20,7 +20,6 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           
-          # Official ARM GNU Toolchains
           wget https://developer.arm.com/-/media/Files/downloads/gnu-a/10.3-2021.07/binrel/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/ gcc64/
@@ -29,7 +28,7 @@ jobs:
           tar -xf gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf.tar.xz
           mv gcc-arm-10.3-2021.07-x86_64-arm-none-linux-gnueabihf/ gcc32/
 
-      - name: 🛡️ Ellis Protocol Config (V5.7.2)
+      - name: 🛡️ Ellis Protocol Config (V5.7.4)
         working-directory: source
         run: |
           mkdir -p out
@@ -44,7 +43,6 @@ jobs:
             --disable CONFIG_UCLAMP_TASK \
             --disable CONFIG_BLK_INLINE_ENCRYPTION \
             --disable CONFIG_MTK_AEE_FEATURE \
-            --disable CONFIG_WEXT_PRIV \
             --disable CONFIG_MTK_MMC_CD_GPIO \
             --disable CONFIG_MTK_EMMC_CQHCI \
             --disable CONFIG_WERROR
@@ -61,23 +59,22 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           
-          # TARGETED OVERRIDES:
-          # We pass these as direct variables to 'make' to override nested Makefiles.
-          # -Wno-everything is our shield against the PBM Line 4000 error.
-          # -fno-stack-protector protects the netdrivers during linking.
-          EXTRA_CFLAGS="-fcommon -fno-stack-protector -w -Wno-everything -Wno-error -Wno-format"
+          # ARCHIVE GEM: 
+          # -fno-pic and -fno-common ensure 'layering_rule.o' is linkable.
+          # -w and -Wno-everything shield the PBM and Video driver typos.
+          EXTRA_CFLAGS="-fcommon -fno-pic -fno-common -fno-stack-protector -w -Wno-everything -Wno-error"
           
+          # Passing LD explicitly as the cross-linker ensures the BFD version is used.
           make -j$(nproc) O=out \
+            LD=aarch64-none-linux-gnu-ld \
             KBUILD_WERROR=0 \
             CLANG_FLAGS="-mno-android" \
             KCFLAGS="$EXTRA_CFLAGS" \
             KAFLAGS="$EXTRA_CFLAGS" \
-            CONFIG_MTK_AEE_FEATURE=n \
-            CONFIG_MTK_MMC_CD_GPIO=n \
-            CONFIG_MTK_EMMC_CQHCI=n
+            CONFIG_MTK_AEE_FEATURE=n
 
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel-V5.7.2
+          name: Ellis-Kernel-V5.7.4
           path: source/out/arch/arm64/boot/Image.gz
