@@ -21,46 +21,47 @@ jobs:
       - name: 3. Download Toolchain (Only if not cached)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          # AOSP Clang
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
           curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
           
-          # AOSP Binutils
           mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          
           rm *.tar.gz
 
-      - name: 4. Configuration Assembly
+      - name: 4. Final Fragment Assembly
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
 
-          # Motorola Hierarchy
+          # Create the final authority fragment
+          cat <<EOF > hid.config
+          # USB HID Support
+          CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_HID_GENERIC=y
+          CONFIG_USB_HID=y
+          
+          # Fix for ARM_V8L_FAST / IOMMU error
+          # Motorola's patched io-pgtable.c requires these to be visible
+          CONFIG_IOMMU_IO_PGTABLE_LPAE=y
+          CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
+          CONFIG_MTK_IOMMU=y
+          CONFIG_MTK_IOMMU_V2=y
+          EOF
+
+          # Merge in the specific hierarchy
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
-            arch/arm64/configs/ext_config/ellis_defconfig.config
+            arch/arm64/configs/ext_config/ellis_defconfig.config \
+            hid.config
 
-          # Injection: HID + MediaTek IOMMU Fix
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
-          
-          # This specifically fixes the ARM_V8L_FAST undeclared identifier error
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_MTK_IOMMU
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_MTK_IOMMU_V2
-
-      - name: 5. Build Kernel Execution
+      - name: 5. Build Execution
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
-          
-          # PATH setup (works whether from cache or fresh download)
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
           export PATH=$CLANG_BIN:$GCC_BIN:$PATH
@@ -68,17 +69,23 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
+          # olddefconfig ensures all dependencies for the new HID flags are met
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
+          
+          # Final Compile
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
-      - name: 6. Execute Motorola Install Script
+      - name: 6. Package Artifacts
         run: |
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
           bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
+          
+          # Bundle the config for your verification
+          cp out/.config ./dist/build_config.txt
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
+          name: Ellis-HID-Kernel-Final
           path: dist/*
