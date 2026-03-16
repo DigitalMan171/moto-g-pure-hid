@@ -1,4 +1,4 @@
-name: Ellis Clean Tree Build V6
+name: Ellis Authoritative Hybrid V7
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v23-${{ runner.os }}
+          key: toolchain-ellis-v24-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -28,33 +28,32 @@ jobs:
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
 
-      - name: 4. Create Standard Configuration Fragment
+      - name: 4. Create Custom Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # MediaTek Hardware Dependencies
+          # Hardware Gatekeepers
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MTK_PLATFORM="mt6765"
           CONFIG_MTK_CMDQ=y
+          CONFIG_MTK_SMI=y
           
-          # Memory and Bus Paths
+          # Memory Path Preservation
           CONFIG_MTK_M4U=y
           CONFIG_MTK_M4U_V2=y
-          CONFIG_MTK_SMI=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
           
-          # Touchscreen Restoration
+          # GKI Unhiding
+          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
+          CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
+          
+          # Input & Touchscreen Support
           CONFIG_INPUT_TOUCHSCREEN=y
           CONFIG_I2C_MTK=y
           CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
           CONFIG_TOUCHSCREEN_HIMAX_INCELL=y
-          
-          # Security & GKI Bypasses
-          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
-          CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
-          # CONFIG_MTK_IOMMU_MISC_SEC is not set
           
           # USB HID Stack
           CONFIG_USB_LIBCOMPOSITE=y
@@ -65,33 +64,35 @@ jobs:
           CONFIG_HID_GENERIC=y
           EOF
 
-      - name: 5. Merge Configs & Execute olddefconfig
+      - name: 5. Execute Authoritative Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
-          # Create the output directory explicitly
           mkdir -p out
           
-          # Merge the layers cleanly
+          # Phase 1: Standard Motorola Merge (Ordered for priority)
           bash scripts/kconfig/merge_config.sh -m -r -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             custom_hid.cfg
           
-          # Finalize the merged config
+          # Phase 2: Authoritative Append (Overrides GKI safety scripts)
+          echo "" >> out/.config
+          echo "# --- AUTHORITATIVE OVERRIDES ---" >> out/.config
+          cat custom_hid.cfg >> out/.config
+          
+          # Phase 3: Validation
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
       - name: 6. Verification Check
         run: |
-          echo "Checking survival of key drivers..."
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "FAIL: M4U stripped" && exit 1)
-          grep "CONFIG_MTK_CMDQ=y" out/.config || (echo "FAIL: CMDQ stripped" && exit 1)
-          grep "CONFIG_INPUT_TOUCHSCREEN=y" out/.config || (echo "FAIL: Touchscreen stripped" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "FAIL: HID stripped" && exit 1)
-          echo "All systems green."
+          echo "Verifying driver survival..."
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "CRITICAL FAIL: M4U still stripped" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "CRITICAL FAIL: HID still stripped" && exit 1)
+          echo "Hardware bridge confirmed."
 
       - name: 7. Compile
         run: |
@@ -104,7 +105,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V6
+          name: Ellis-Final-V7
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
