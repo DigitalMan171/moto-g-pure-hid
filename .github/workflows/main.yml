@@ -13,49 +13,47 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole
 
-      - name: Configure and Merge Build Files
+      - name: Configure and Merge
         run: |
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          cd kernel-source # Adjust this path if your source is in the root
           mkdir -p out
           
-          # Layered merge: Base -> SoC -> Device
-          # This order ensures ARM_V8L_FAST is declared via moto-mt6765.config
+          # Layered merge to fix ARM_V8L_FAST and platform symbols
           ./scripts/kconfig/merge_config.sh -m -O out/ \
             arch/arm64/configs/vendor/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
 
-          # Injection: USB HID Gadget Support
+          # Enable HID Gadget Support
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # Finalize config
           make O=out/ ARCH=arm64 olddefconfig
 
       - name: Compile Kernel
         run: |
-          cd kernel-source
-          # Using KCFLAGS to ignore the enum mismatches we saw in the previous MediaTek logs
+          # KCFLAGS="-w" silences the minor MediaTek enum/header warnings
           make O=out/ ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
-      - name: Prepare Artifacts for AIK
+      - name: Prepare Image.gz-dtb
         run: |
-          cd kernel-source
-          # Find the specific Ellis DTB to pair with the kernel
+          # Find the DTB specifically for Ellis
           DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
           if [ -n "$DTB_PATH" ]; then
+            echo "Found Ellis DTB at $DTB_PATH. Appending to Image.gz..."
             cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > out/arch/arm64/boot/Image.gz-dtb
           else
-            echo "Ellis DTB not found, uploading standard Image.gz"
+            echo "Ellis DTB not found by name. Checking mt6765..."
+            FALLBACK_DTB=$(find out/arch/arm64/boot/dts/mediatek/ -name "mt6765*.dtb" | head -n 1)
+            cat out/arch/arm64/boot/Image.gz "$FALLBACK_DTB" > out/arch/arm64/boot/Image.gz-dtb
           fi
 
-      - name: Upload Kernel for AIK
+      - name: Upload for AIK
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
+          name: Ellis-HID-Kernel-Result
           path: |
-            kernel-source/out/arch/arm64/boot/Image.gz
-            kernel-source/out/arch/arm64/boot/Image.gz-dtb
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/Image.gz-dtb
