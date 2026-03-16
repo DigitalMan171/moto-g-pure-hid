@@ -1,4 +1,4 @@
-name: Moto G Pure HID - Reverted & Patched
+name: Moto G Pure HID - Restoration
 on:
   workflow_dispatch:
 
@@ -19,20 +19,14 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
-      - name: Apply Stability Patches
+      - name: Surgical Code Fixes
         run: |
           cd kernel-source
-          # Fix the 'uclamp' failure from the 70% build
+          # Fix the fatal 'uclamp_se_set' inlining failure from the 70% build
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
           
-          # Fix the 'fuelgauge' incomplete type failure
+          # Fix the 'FUELGAUGE_TEMPERATURE' incomplete type failure
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
-          
-          # Fix the 'ksm' inline failure (preventative)
-          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          
-          # Fix the flag typo that caused the 'prepare' crash in v2
-          sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' Makefile
 
       - name: Build Logic
         run: |
@@ -43,18 +37,16 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CC=clang
-          # We define HOSTCC to ensure scripts are built with the same logic
-          export HOSTCC=gcc 
           mkdir -p out
 
-          # Initialize with the base config
+          # Step A: Initialize the MediaTek Base
           make O=out k65v1_64_bsp_defconfig
           
-          # Layer Motorola specific configs
+          # Step B: Merge Motorola Vendor and Device Layers
           ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/moto-mt6765.config
           ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # Enable HID Gadget support
+          # Step C: Explicitly Enable USB HID Gadget
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
@@ -62,12 +54,10 @@ jobs:
           
           make O=out olddefconfig
 
-          # COMPILATION:
-          # -w silences all warnings (preventing 'warnings-as-errors' halts)
-          # -Wno-error ensures that minor compiler disagreements don't kill the build
-          make O=out KCFLAGS="-w -Wno-error" -j$(nproc) Image.gz dtbs
+          # Step D: Final Compilation
+          make O=out -j$(nproc) Image.gz dtbs
 
-      - name: Package Output
+      - name: Append DTB & Upload
         run: |
           cd kernel-source
           DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
@@ -79,5 +69,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-Final
+          name: Ellis-HID-Kernel-Restored
           path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
