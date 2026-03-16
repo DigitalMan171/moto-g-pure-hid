@@ -1,4 +1,4 @@
-name: Moto G Pure HID - Factory Stack
+name: Moto G Pure HID - Complete Factory Stack
 on:
   workflow_dispatch:
 
@@ -19,15 +19,15 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
-      - name: Mandatory Code Fixes
+      - name: Surgical Code Fixes
         run: |
           cd kernel-source
-          # Fix the fatal uclamp inlining error found in previous runs
+          # Fix fatal uclamp inlining error
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
           # Fix fuelgauge struct definition
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
 
-      - name: Build Logic (Factory Sandwich)
+      - name: Build Logic (Full Factory Sandwich)
         run: |
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
@@ -38,44 +38,53 @@ jobs:
           export CC=clang
           mkdir -p out
 
-          # 1. Start with the GKI base (The 'Bread')
+          # 1. Start with the GKI base
           make O=out gki_defconfig
 
-          # 2. Layer the Factory Templates (The 'Meat' and 'Toppings')
+          # 2. Layer the templates in hierarchical order
+          # GKI -> K65 BSP -> MT6765 Platform -> Ellis Device
           ./scripts/kconfig/merge_config.sh -O out out/.config \
+              arch/arm64/configs/ext_config/moto-k65v1_64_bsp.config \
               arch/arm64/configs/ext_config/moto-mt6765.config \
               arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # 3. Inject HID Gadget Support
+          # 3. Inject USB HID Gadget support
+          ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file out/.config --enable CONFIG_USB_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
+          ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
           # 4. Finalize config
           make O=out olddefconfig
 
           # 5. Compile
-          # Adding mismatch suppression to handle MediaTek legacy headers
-          make O=out KCFLAGS="-w -Wno-enum-int-mismatch" -j$(nproc) Image.gz dtbs
+          # KCFLAGS suppresses enum mismatches and missing function warnings common in vendor source
+          make O=out KCFLAGS="-w -Wno-enum-int-mismatch -Wno-implicit-function-declaration" -j$(nproc) Image.gz dtbs
 
-      - name: Package for Ellis
+      - name: Package Ellis Artifact
         run: |
           cd kernel-source
-          # Locate the specific Ellis DTB. 
-          # MediaTek often generates several; we want the one specific to this project.
+          # Find the DTB specifically for Ellis hardware
+          # It usually results in k65v1_64_bsp-ellis.dtb or mt6765_ellis.dtb
           DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
           
           if [ -z "$DTB_PATH" ]; then
-            echo "Warning: Ellis DTB not found by name, using mt6765 fallback"
-            DTB_PATH=out/arch/arm64/boot/dts/mediatek/mt6765.dtb
+            echo "Searching for broader MT6765 DTB..."
+            DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "mt6765*.dtb" | head -n 1)
           fi
           
-          echo "Using DTB: $DTB_PATH"
-          # Concatenate kernel and DTB as seen in your magiskboot 'DTB_SZ' info
+          if [ -z "$DTB_PATH" ]; then
+            echo "ERROR: No suitable DTB found. Check build logs for dts compilation errors."
+            exit 1
+          fi
+          
+          echo "Found DTB: $DTB_PATH"
+          # Create the final bootable kernel + dtb blob
           cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > out/arch/arm64/boot/Image.gz-dtb
+          echo "Artifact created: Image.gz-dtb"
 
-      - name: Upload Artifact
+      - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Factory-Build
+          name: Ellis-HID-Kernel-Factory
           path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
