@@ -1,4 +1,4 @@
-name: Ellis Dependency-First Build V9
+name: Ellis Deep-Dependency Build V10
 on: [workflow_dispatch]
 
 jobs:
@@ -16,46 +16,41 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v26-${{ runner.os }}
+          key: toolchain-ellis-v27-${{ runner.os }}
 
-      - name: 3. Create Custom Fragment with Full Dependency Chain
+      - name: 3. Create Clean Dependency Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Platform & Bus Parents ---
-          CONFIG_ARCH_MEDIATEK=y
-          CONFIG_MTK_PLATFORM="mt6765"
-          CONFIG_ARCH_MT6765=y
+          # --- Deep SoC Infrastructure ---
+          CONFIG_MTK_SOC_STATION=y
+          CONFIG_MTK_PMIC_WRAP=y
+          CONFIG_MTK_GCE=y
+          CONFIG_MTK_QOS_FRAMEWORK=y
+          
+          # --- Memory & Bus Pillars ---
           CONFIG_MTK_CMDQ=y
           CONFIG_MTK_SMI=y
-          
-          # --- Memory Management (Dependent on SMI/CMDQ) ---
+          CONFIG_MTK_SMI_BWP=y
           CONFIG_MTK_M4U=y
           CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
-          CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
-          CONFIG_IOMMU_IO_PGTABLE_FAST=y
           
-          # --- GKI Visibility Toggles ---
-          CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
-          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
-          
-          # --- Touchscreen Infrastructure ---
+          # --- Touchscreen Power & Bus ---
           CONFIG_INPUT_TOUCHSCREEN=y
           CONFIG_I2C_MTK=y
           CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
-          CONFIG_TOUCHSCREEN_HIMAX_INCELL=y
           
-          # --- USB HID Gadget Stack ---
+          # --- USB HID Logic ---
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
-          CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_F_HID=y
+          CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_HID=y
           CONFIG_HID_GENERIC=y
           EOF
 
-      - name: 4. Formal Motorola Merge Protocol
+      - name: 4. Standard Motorola Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
@@ -63,23 +58,22 @@ jobs:
           
           mkdir -p out
           
-          # We merge in order of increasing specificity. 
-          # custom_hid.cfg is last so it has final say over the others.
+          # We pass custom_hid.cfg at the end so its dependencies are checked against the base.
           bash scripts/kconfig/merge_config.sh -m -r -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             custom_hid.cfg
           
-          # Finalize the configuration tree
+          # Use olddefconfig to resolve the tree
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
-      - name: 5. Verification Check
+      - name: 5. Verification
         run: |
-          echo "Verifying that dependencies allowed drivers to stay..."
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U still missing - logical dependency fail" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID missing" && exit 1)
-          echo "Success: Dependency chain is satisfied."
+          echo "Checking survival of the hardware bridge..."
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "FAIL: M4U stripped. SMI or GCE dependency unmet." && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "FAIL: HID stripped." && exit 1)
+          echo "Hardware bridge confirmed."
 
       - name: 6. Compile
         run: |
@@ -92,7 +86,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V9
+          name: Ellis-Final-V10
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
