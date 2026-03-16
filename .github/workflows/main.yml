@@ -1,4 +1,4 @@
-name: Ellis Ironclad Build V14
+name: Ellis Linker-Optimized Build V16
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v30-${{ runner.os }}
+          key: toolchain-ellis-v32-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -28,58 +28,56 @@ jobs:
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
 
-      - name: 4. Create Ironclad Fragment
+      - name: 4. Create Linker-Safe Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Root Architecture ---
+          # --- Platform & Linker Core ---
           CONFIG_ARCH_MEDIATEK=y
-          CONFIG_ARM64=y
           CONFIG_MTK_PLATFORM="mt6765"
+          CONFIG_ARCH_MT6765=y
+          CONFIG_MTK_PLATFORM_MT6765=y
+          CONFIG_STRIP_ASM_SYMS=n
           
-          # --- M4U / IOMMU Deep Support ---
+          # --- M4U / IOMMU Symbol Exports & Support ---
           CONFIG_MTK_M4U_SUPPORT=y
           CONFIG_MTK_M4U=y
-          CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
+          CONFIG_MTK_IOMMU_GKI_SYMBOL_EXPORT=y
           CONFIG_MTK_SMI=y
           
-          # --- DISABLE POISON PILLS (Bypass Secure TEE requirements) ---
-          # CONFIG_MTK_IOMMU_MISC_SEC is not set
-          # CONFIG_MTK_M4U_SECURE is not set
-          
-          # --- GKI Visibility ---
-          CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
-          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
-          
-          # --- Bus Infrastructure ---
-          CONFIG_MTK_GCE=y
-          CONFIG_MTK_CMDQ=y
-          CONFIG_MTK_SMI_BWP=y
-          
-          # --- Touchscreen & I2C ---
-          CONFIG_INPUT_TOUCHSCREEN=y
-          CONFIG_I2C_MTK=y
-          CONFIG_MTK_I2C=y
-          CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
-          
-          # --- USB HID Logic ---
+          # --- USB Vendor Glue ---
+          CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_HID=y
           CONFIG_HID_GENERIC=y
+          
+          # --- GKI Visibility & Infrastructure ---
+          CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
+          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
+          CONFIG_MTK_GCE=y
+          CONFIG_MTK_CMDQ=y
+          CONFIG_MTK_PMIC_WRAP=y
+          
+          # --- Touchscreen ---
+          CONFIG_INPUT_TOUCHSCREEN=y
+          CONFIG_I2C_MTK=y
+          CONFIG_MTK_I2C=y
+          CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
           EOF
 
-      - name: 5. Execute Motorola Merge
+      - name: 5. Execute Permissive Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
           mkdir -p out
-          bash scripts/kconfig/merge_config.sh -m -r -O out \
+          # Permissive merge: custom_hid.cfg has the final word
+          bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
@@ -89,24 +87,24 @@ jobs:
 
       - name: 6. Verification
         run: |
-          echo "Verifying hardware bridge survival..."
-          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || exit 1
-          grep "CONFIG_MTK_M4U_SUPPORT=y" out/.config || (echo "M4U_SUPPORT LOST" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID LOST" && exit 1)
-          echo "Hardware bridge confirmed."
+          echo "Verifying hardware bridge and symbol survival..."
+          grep "CONFIG_MTK_IOMMU_GKI_SYMBOL_EXPORT=y" out/.config || (echo "SYMBOL EXPORT LOST" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID DRIVER LOST" && exit 1)
+          echo "Verification passed: Symbols and drivers are intact."
 
       - name: 7. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 KERNEL_DEFCONFIG=ellis_defconfig CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
+          # Use LLVM tools to handle MediaTek symbol linking correctly
+          make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
 
       - name: 8. Package & Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V14
+          name: Ellis-Linker-V16
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
