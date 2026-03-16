@@ -1,4 +1,4 @@
-name: Motorola Ellis HID Integrated Build
+name: Motorola Ellis HID Diagnostic Build
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v3-${{ runner.os }}
+          key: toolchain-ellis-v5-${{ runner.os }}
 
       - name: 3. Download Toolchain (Only if Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -30,17 +30,16 @@ jobs:
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           rm *.tar.gz
 
-      - name: 4. Modify Device DNA (Rewrite Ellis Fragment)
+      - name: 4. Modify and Inspect Device DNA
         run: |
           export DEVICE_CONFIG=arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # Overwriting the 1-liner with our Expert Authority block
+          # We rewrite the file to include the original loglevel PLUS our authority
           cat <<EOF > $DEVICE_CONFIG
           CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4
           
           # --- MASTER UNLOCKS ---
           CONFIG_EXPERT=y
-          CONFIG_CHECKPOINT_RESTORE=y
           CONFIG_DEBUG_KERNEL=y
 
           # --- USB HID GADGET STACK ---
@@ -51,7 +50,7 @@ jobs:
           CONFIG_HID_GENERIC=y
           CONFIG_USB_HID=y
 
-          # --- MEDIATEK IOMMU FAST PATH ---
+          # --- IOMMU VENDOR REQS ---
           CONFIG_IOMMU_SUPPORT=y
           CONFIG_IOMMU_IO_PGTABLE=y
           CONFIG_IOMMU_IO_PGTABLE_LPAE=y
@@ -61,14 +60,17 @@ jobs:
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           EOF
           
-          echo "Ellis fragment rewritten. Content:"
+          echo "--- VERIFYING ELLIS FRAGMENT CONTENT ---"
           cat $DEVICE_CONFIG
+          echo "--- END OF FRAGMENT ---"
 
       - name: 5. Setup Initial Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
+          
+          # Merging the three layers
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -82,15 +84,13 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # Resolve dependencies
+          # Resolve dependencies - this is where flags get stripped if parents are missing
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
           
-          # Check if our flags survived olddefconfig
-          echo "--- FINAL CONFIG VERIFICATION ---"
-          grep "CONFIG_EXPERT" $KBUILD_OUTPUT/.config || echo "EXPERT LOST"
-          grep "CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST" $KBUILD_OUTPUT/.config || echo "FAST FLAG LOST"
+          echo "--- CHECKING FINAL SURVIVAL IN .CONFIG ---"
+          grep -E "CONFIG_EXPERT|CONFIG_USB_F_HID|CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST" $KBUILD_OUTPUT/.config || echo "CRITICAL FLAGS STRIPPED"
           
-          # Compile
+          # Start build
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
       - name: 7. Package Artifacts
@@ -101,11 +101,11 @@ jobs:
             VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
             bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
           fi
-          [ -f out/.config ] && cp out/.config ./dist/final_verified_config.txt
+          [ -f out/.config ] && cp out/.config ./dist/final_diagnostic_config.txt
 
       - name: Upload Build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Integrated-Kernel
+          name: Ellis-Diagnostic-Build
           path: dist/*
