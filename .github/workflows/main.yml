@@ -7,24 +7,18 @@ jobs:
     steps:
       - name: 1. Pull Motorola Kernel Source
         run: |
-          # IMPORTANT: Verify this URL is your specific Ellis source
-          # I am using a depth of 1 to save time/space
+          # Pulling the source into the workspace root so paths align
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu libssl-dev flex bison lz4 python3
-
-      - name: 3. Fetch Prebuilt Clang (Direct Download)
+      - name: 2. Fetch Toolchain (AOSP Clang r416183b)
         run: |
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
-          # Use the Archive format to get the real binaries
+          # Direct binary download to save time/space
           curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
           rm clang.tar.gz
 
-      - name: 4. Build the Sandwich
+      - name: 3. Configure and Build
         run: |
           export ARCH=arm64
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
@@ -32,27 +26,41 @@ jobs:
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
 
-          # Now the files exist, so we can run the merge
+          # Using the exact path you provided for the base
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
-            arch/arm64/configs/vendor/gki_defconfig \
+            arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
 
-          # Enable your HID Toppings
+          # Enable HID Toppings
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
+          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
 
+          # Compile using Clang and Aarch64 triple
           make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- -j$(nproc) olddefconfig
           make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
-      - name: 5. Run Your Install Script
+      - name: 4. Run Motorola Install Script
         run: |
           mkdir -p ./dist
-          # Use the exact path you gave me
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
-          bash arch/arm64/boot/install.sh $VERSION out/arch/arm64/boot/Image.gz out/System.map ./dist
+          
+          # Using the exact path confirmed: arch/arm64/boot/install.sh
+          bash arch/arm64/boot/install.sh \
+            $VERSION \
+            out/arch/arm64/boot/Image.gz \
+            out/System.map \
+            ./dist
 
-      - name: Upload Results
+      - name: 5. Append DTB for AIK
+        run: |
+          # Locate the Ellis DTB and pair it with the kernel
+          DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
+          cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Kernel
+          name: Ellis-HID-Kernel
           path: dist/*
