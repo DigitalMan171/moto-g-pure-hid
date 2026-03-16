@@ -1,4 +1,4 @@
-name: Ellis Clean Tree Build V5
+name: Ellis Clean Tree Build V6
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v22-${{ runner.os }}
+          key: toolchain-ellis-v23-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -71,6 +71,9 @@ jobs:
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
+          # Create the output directory explicitly
+          mkdir -p out
+          
           # Merge the layers cleanly
           bash scripts/kconfig/merge_config.sh -m -r -O out \
             arch/arm64/configs/gki_defconfig \
@@ -88,7 +91,7 @@ jobs:
           grep "CONFIG_MTK_CMDQ=y" out/.config || (echo "FAIL: CMDQ stripped" && exit 1)
           grep "CONFIG_INPUT_TOUCHSCREEN=y" out/.config || (echo "FAIL: Touchscreen stripped" && exit 1)
           grep "CONFIG_USB_F_HID=y" out/.config || (echo "FAIL: HID stripped" && exit 1)
-          echo "All systems green. The tree is intact."
+          echo "All systems green."
 
       - name: 7. Compile
         run: |
@@ -101,7 +104,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V5
+          name: Ellis-Final-V6
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
