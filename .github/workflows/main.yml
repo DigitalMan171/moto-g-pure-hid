@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.9.4"
+name: "Ellis: Official Open-Source Build V5.9.5"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,27 +11,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev device-tree-compiler lib32z1 lib32ncurses6 lib32stdc++6
           
-          # Install legacy ncurses 5
+          # Manually install legacy ncurses 5
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2.1_amd64.deb
           sudo dpkg -i libtinfo5_6.2-0ubuntu2.1_amd64.deb || true
           sudo dpkg -i libncurses5_6.2-0ubuntu2.1_amd64.deb || true
           rm *.deb
 
-      - name: 🌐 Clone Source & Protocol Toolchains
+      - name: 🌐 Clone Source & Public Toolchains
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           
-          # Target Clang r383902b1 (The Android 12 Standard)
-          git clone --depth=1 https://github.com/najahiiii/clang-r383902b1 clang
+          # Using LineageOS Clang 11 (Publicly Accessible)
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r383902 clang
           
-          # GCC 4.9 Toolchains
+          # AOSP GCC 4.9 Toolchains
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
           
           chmod -R +x clang/ gcc64/ gcc32/
           
-          # Path Injection
+          # Dynamic PATH injection for binaries
           find $(pwd)/clang -type d -name "bin" >> $GITHUB_PATH
           find $(pwd)/gcc64 -type d -name "bin" >> $GITHUB_PATH
           find $(pwd)/gcc32 -type d -name "bin" >> $GITHUB_PATH
@@ -54,11 +54,10 @@ jobs:
       - name: 🚀 Build with Ellis Defconfig
         working-directory: source
         run: |
-          # 1. Initialize with your specific Ellis config
-          # Note: We point to the specific file you identified
+          # 1. Initialize with your specific Ellis config path
           make O=out arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # 2. Patch for AEE/Video Linking (The 'built-in.a' fix)
+          # 2. Patch for Symbol Exports (Audio/Video built-in fix)
           sed -i '1i #include <linux/export.h>' drivers/power/supply/mtk_battery.c
           sed -i '1i void aee_kernel_exception_api_func(void *s, ...) {} EXPORT_SYMBOL(aee_kernel_exception_api_func);' drivers/power/supply/mtk_battery.c
           sed -i '1i void aee_kernel_warning_api_func(void *s, ...) {} EXPORT_SYMBOL(aee_kernel_warning_api_func);' drivers/power/supply/mtk_battery.c
@@ -87,11 +86,10 @@ jobs:
         working-directory: source
         run: |
           DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          # Matching the stock 'Gzip' format and DTB append
           cat out/arch/arm64/boot/Image.gz "$DTB_FILE" > out/arch/arm64/boot/Image.gz-dtb
 
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-V5.9.4
+          name: Ellis-HID-Kernel-V5.9.5
           path: source/out/arch/arm64/boot/Image.gz-dtb
