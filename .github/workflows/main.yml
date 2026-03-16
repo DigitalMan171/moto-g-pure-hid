@@ -1,4 +1,4 @@
-name: Motorola Ellis HID Final Authoritative Build
+name: Motorola Ellis HID Memory-Path Build
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v15-${{ runner.os }}
+          key: toolchain-ellis-v16-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -24,70 +24,59 @@ jobs:
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
           curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
-          
           mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          rm *.tar.gz
 
       - name: 4. Surgical Identity Injection
         run: |
           export ARCH=arm64
           export KERNEL_DEFCONFIG=ellis_defconfig
           
-          # A. Merge Motorola & GKI layers
           bash scripts/kconfig/merge_config.sh -m -r \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # B. Inject Vendor Logic + HID Stack (The Bridge Order)
           cat <<EOF >> .config
-          # MediaTek M4U Bridge (Fixes io-pgtable error)
+          # MediaTek SMI & M4U Memory Paths
+          CONFIG_MTK_SMI=y
+          CONFIG_MTK_SMI_B_MT6765=y
           CONFIG_MTK_M4U=y
+          CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU_V2=y
           CONFIG_MTK_IOMMU_MISC=y
+
+          # Bridge for Fast Mode
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
 
-          # Hardware Identity
+          # Identity
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MACH_MT6765=y
           CONFIG_MTK_PLATFORM="mt6765"
           
-          # USB Stack (OTG + Dual Role + ConfigFS Compatibility)
+          # USB & HID Stack
           CONFIG_USB_MTK_OTG=y
           CONFIG_USB_MTK_DUAL_ROLE=y
           CONFIG_USB_CONFIGFS=y
-          CONFIG_USB_CONFIGFS_F_MTP=y
-          CONFIG_USB_CONFIGFS_F_PTP=y
-          
-          # HID Gadget Feature
-          CONFIG_EXPERT=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_HID=y
           CONFIG_HID_GENERIC=y
           EOF
 
-          # C. Finalize for kenv.mk
           mkdir -p out
           mv .config out/.config
           cp out/.config arch/arm64/configs/ellis_defconfig
 
-      - name: 5. Execute Build (The Silent Non-Interactive Way)
+      - name: 5. Execute Build
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
 
-          # 1. Answer all new hardware/errata questions with defaults silently
-          make O=$KBUILD_OUTPUT \
-               ARCH=arm64 \
-               PROJECT=ellis \
-               olddefconfig
-
-          # 2. Run the actual compilation
+          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
           make O=$KBUILD_OUTPUT \
                PROJECT=ellis \
                TARGET_BOARD_PLATFORM=mt6765 \
@@ -100,18 +89,17 @@ jobs:
                KCFLAGS="-w" \
                -j$(nproc) Image.gz dtbs
 
-      - name: 6. Package Results
+      - name: 6. Package & Upload
         if: always()
         run: |
           mkdir -p dist
-          [ -f out/.config ] && cp out/.config ./dist/final_config.txt
           [ -f out/arch/arm64/boot/Image.gz ] && cp out/arch/arm64/boot/Image.gz ./dist/
-          find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" -exec cp {} ./dist/ \; || true
+          [ -f out/.config ] && cp out/.config ./dist/final_config.txt
           ls -R dist/
 
       - name: 7. Upload Build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-HID-Kernel
+          name: Ellis-MemoryPath-HID-Kernel
           path: dist/
