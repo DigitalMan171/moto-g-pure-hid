@@ -1,4 +1,4 @@
-name: Moto G Pure HID v2 (Optimized)
+name: Moto G Pure HID - Reverted & Patched
 on:
   workflow_dispatch:
 
@@ -9,35 +9,32 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment
+      - name: Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev bison flex libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi pahole device-tree-compiler
 
       - name: Fetch Toolchain & Source
         run: |
-          # Using the stable AOSP Clang r416183b
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
-          # Fetching Motorola MT6765 source
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git -b android-12-release-s3rhs32.20-42-10-4-11 kernel-source
 
-      - name: Patch & Fix Source
+      - name: Apply Stability Patches
         run: |
           cd kernel-source
-          
-          # 1. Fix 'uclamp_se_set' inlining error (v1 failure)
+          # Fix the 'uclamp' failure from the 70% build
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
           
-          # 2. Fix 'ksm_flock' inlining error (preventative)
-          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
-          
-          # 3. Fix 'FUELGAUGE_TEMPERATURE' incomplete type error (v0 failure)
+          # Fix the 'fuelgauge' incomplete type failure
           sed -i '1i struct FUELGAUGE_TEMPERATURE { int Temperature; int Temp_Array[20]; };' drivers/power/supply/mtk_battery_table.h
           
-          # 4. Silence Clang noise to prevent logs from bloating
-          sed -i 's/-Werror//g' Makefile
+          # Fix the 'ksm' inline failure (preventative)
+          sed -i 's/inline void ksm_flock/void ksm_flock/g' include/linux/keyslot-manager.h
+          
+          # Fix the flag typo that caused the 'prepare' crash in v2
+          sed -i 's/-implicit-function-declaration/-Wimplicit-function-declaration/g' Makefile
 
-      - name: Configure and Build
+      - name: Build Logic
         run: |
           export PATH=$(pwd)/clang-aosp/bin:$PATH
           cd kernel-source
@@ -46,40 +43,41 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           export CC=clang
+          # We define HOSTCC to ensure scripts are built with the same logic
+          export HOSTCC=gcc 
           mkdir -p out
 
-          # Step 1: Initialize MediaTek Base
+          # Initialize with the base config
           make O=out k65v1_64_bsp_defconfig
           
-          # Step 2: Merge Motorola Layers (Vendor then Device)
+          # Layer Motorola specific configs
           ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/moto-mt6765.config
           ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/ext_config/ellis_defconfig.config
           
-          # Step 3: Inject HID and Project Requirements
+          # Enable HID Gadget support
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS
           ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file out/.config --enable CONFIG_USB_HID
           
-          # Step 4: Finalize Config
           make O=out olddefconfig
 
-          # Step 5: Full Compile
-          make O=out KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+          # COMPILATION:
+          # -w silences all warnings (preventing 'warnings-as-errors' halts)
+          # -Wno-error ensures that minor compiler disagreements don't kill the build
+          make O=out KCFLAGS="-w -Wno-error" -j$(nproc) Image.gz dtbs
 
-          # Step 6: Create Flashable Kernel + DTB
+      - name: Package Output
+        run: |
+          cd kernel-source
           DTB_FILE=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
           if [ -z "$DTB_FILE" ]; then
-             echo "Specific Ellis DTB not found, using generic mt6765"
              DTB_FILE=out/arch/arm64/boot/dts/mediatek/mt6765.dtb
           fi
           cat out/arch/arm64/boot/Image.gz "$DTB_FILE" > out/arch/arm64/boot/Image.gz-dtb
 
-      - name: Verify & Upload
-        if: success()
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-v2
-          path: |
-            kernel-source/out/arch/arm64/boot/Image.gz-dtb
-            kernel-source/out/.config
+          name: Ellis-HID-Kernel-Final
+          path: kernel-source/out/arch/arm64/boot/Image.gz-dtb
