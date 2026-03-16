@@ -1,4 +1,4 @@
-name: Build Moto G Pure Kernel
+name: Motorola Ellis HID Kernel Build
 on: [workflow_dispatch]
 
 jobs:
@@ -11,27 +11,69 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole
+          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole libssl-dev
 
-      - name: Build Kernel
+      - name: Setup Toolchain (Prebuilts)
         run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          mkdir -p out
+          # We use the standard AOSP Clang to fix missing MediaTek tool errors
+          mkdir -p prebuilts/clang/host/linux-x86
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/clang-r416183b prebuilts/clang/host/linux-x86/clang-r416183b
           
-          # Use the exact files for the Moto G Pure (Ellis)
-          # These must exist in arch/arm64/configs/
-          ./scripts/kconfig/merge_config.sh -m -O out/ \
+      - name: Configure and Build (The Sandwich)
+        run: |
+          # Environment Variables
+          export ARCH=arm64
+          export CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
+          export PATH=$CLANG_PATH:$PATH
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export KBUILD_OUTPUT=out
+          
+          mkdir -p $KBUILD_OUTPUT
+
+          # 1. Merge the Motorola Sandwich
+          ./scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/vendor/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
 
-          # Force HID Gadget configs
-          ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
-          ./scripts/config --file out/.config --enable CONFIG_USB_HID
+          # 2. Inject HID & F2FS
+          ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
+          ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
+          ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_F2FS_FS
+
+          # 3. Finalize and Compile
+          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld olddefconfig
+          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+
+      - name: Run Motorola Install Script
+        run: |
+          export KBUILD_OUTPUT=out
+          export INSTALL_PATH=./dist
+          mkdir -p $INSTALL_PATH
           
-          make O=out/ ARCH=arm64 olddefconfig
+          # Use your specific install.sh path
+          # [version] [image] [map] [destination]
+          VERSION=$(cat $KBUILD_OUTPUT/include/config/kernel.release 2>/dev/null || echo "moto-hid")
           
-          # Compile the Image and Device Tree Blobs
-          make O=out/ ARCH=arm6
+          ./arch/arm64/boot/install.sh \
+            $VERSION \
+            $KBUILD_OUTPUT/arch/arm64/boot/Image.gz \
+            $KBUILD_OUTPUT/System.map \
+            $INSTALL_PATH
+
+      - name: Finalize Image.gz-dtb
+        run: |
+          # Find and append the Ellis DTB for AIK
+          DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
+          cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ellis-HID-Kernel
+          path: |
+            dist/Image.gz
+            dist/Image.gz-dtb
+            dist/System.map
