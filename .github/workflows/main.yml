@@ -7,79 +7,75 @@ jobs:
     steps:
       - name: 1. Pull Ellis Android 12 Source
         run: |
-          # Pulling the exact branch you provided
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Toolchain Prep (Clang + Binutils)
+      - name: 2. Cache Toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            prebuilts/clang/host/linux-x86/clang-r416183b
+            prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+          key: toolchain-r416183b-gcc4.9-v1
+
+      - name: 3. Download Toolchain (Only if not cached)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          # A. Download AOSP Clang
+          # AOSP Clang
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
           curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
           
-          # B. Download AOSP Binutils (Fixes LSE atomics and assembler errors)
+          # AOSP Binutils
           mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           
           rm *.tar.gz
 
-      - name: 3. Configuration Assembly
+      - name: 4. Configuration Assembly
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
 
-          # Motorola Order: GKI -> SoC -> Device Overlay
+          # Motorola Hierarchy
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
 
-          # Injection: Apply HID toppings to the merged result
+          # Injection: HID + MediaTek IOMMU Fix
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
+          
+          # This specifically fixes the ARM_V8L_FAST undeclared identifier error
+          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST
+          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_MTK_IOMMU
+          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_MTK_IOMMU_V2
 
-      - name: 4. Build Kernel Execution
+      - name: 5. Build Kernel Execution
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           
-          # Define Toolchain Paths
+          # PATH setup (works whether from cache or fresh download)
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
           export PATH=$CLANG_BIN:$GCC_BIN:$PATH
 
-          # Setup Compiler Variables
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # 1. Sync dependencies
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
-          
-          # 2. Compile Image and Device Trees
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
-      - name: 5. Execute Motorola Install Script
+      - name: 6. Execute Motorola Install Script
         run: |
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
-          
-          # Using the install script found at arch/arm64/boot/install.sh
-          bash arch/arm64/boot/install.sh \
-            "$VERSION" \
-            out/arch/arm64/boot/Image.gz \
-            out/System.map \
-            ./dist
-
-      - name: 6. Packaging for AIK
-        run: |
-          # Find the specific Ellis DTB and append it for image tools
-          DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          if [ -f "$DTB_PATH" ]; then
-            cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
-          fi
+          bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
