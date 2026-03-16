@@ -9,65 +9,63 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Toolchain Prep (AOSP Clang r416183b)
+      - name: 2. Toolchain Prep
         run: |
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
           curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
           rm clang.tar.gz
 
-      - name: 3. Configuration Assembly (Pre-Compiler)
+      - name: 3. Motorola Official Configuration
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
+          export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
+          export PATH=$CLANG_BIN:$PATH
+          
+          # 1. Motorola's required environment variable
+          export TARGET_PRODUCT=ellis
+
           mkdir -p $KBUILD_OUTPUT
 
-          # MERGE: Combine layers into one static file. 
-          # This is the only time we touch the config layers.
-          bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
-            arch/arm64/configs/gki_defconfig \
-            arch/arm64/configs/ext_config/moto-mt6765.config \
-            arch/arm64/configs/ext_config/ellis_defconfig.config
+          # 2. Let Motorola's Makefiles do the merging
+          # This automatically finds the correct GKI, SoC, and Ellis fragments
+          make O=$KBUILD_OUTPUT CC=clang ellis_defconfig
 
-          # INJECT: Manual toppings after the merge. 
-          # This bypasses the need for manual 'cat' or redundant make targets.
+          # 3. Inject HID settings directly into the resulting official file
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
-          bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_F2FS_FS
 
-      - name: 4. Build Execution (Compiler Only)
+          # 4. Seal the configuration
+          make O=$KBUILD_OUTPUT CC=clang olddefconfig
+
+      - name: 4. Compile
         run: |
           export ARCH=arm64
+          export TARGET_PRODUCT=ellis
+          export KBUILD_OUTPUT=out
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export PATH=$CLANG_BIN:$PATH
-          export KBUILD_OUTPUT=out
 
-          # SEAL: Resolve dependencies based on our injected .config
-          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- -j$(nproc) olddefconfig
-
-          # COMPILE: Generate the binary and System.map
+          # Build the kernel natively
           make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w" -j$(nproc) modules
 
-      - name: 5. Run Motorola Install Script
+      - name: 5. Finalize with Motorola Install Script
         run: |
           mkdir -p ./dist
-          # $1: Version | $2: Kernel Image | $3: System.map | $4: Dest
-          VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid-$(date +%F)")
+          VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
           
+          # Run the installer
           bash arch/arm64/boot/install.sh \
             "$VERSION" \
             out/arch/arm64/boot/Image.gz \
             out/System.map \
             ./dist
 
-      - name: 6. Prepare AIK Package
-        run: |
-          DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
-
-      - name: Upload Build Artifacts
+      - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel
+          name: Ellis-Kernel-HID
           path: dist/*
