@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v10-${{ runner.os }}
+          key: toolchain-ellis-v11-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -48,7 +48,7 @@ jobs:
           CONFIG_MACH_MT6765=y
           CONFIG_MTK_PLATFORM="mt6765"
           
-          # IOMMU Fix (Use V2 to avoid generic header conflicts in drivers/iommu/)
+          # IOMMU Fix (Use V2 to avoid generic header conflicts)
           CONFIG_MTK_IOMMU_V2=y
           CONFIG_MTK_IOMMU_MISC=y
           
@@ -72,7 +72,7 @@ jobs:
           mv .config out/.config
           cp out/.config arch/arm64/configs/ellis_defconfig
 
-      - name: 5. Execute Build (kenv.mk Compliant)
+      - name: 5. Execute Build (The Silent Non-Interactive Way)
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
@@ -80,6 +80,13 @@ jobs:
           export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
           export PATH=$CLANG_BIN:$GCC_BIN:$PATH
 
+          # 1. Answer all new hardware/errata questions with defaults silently
+          make O=$KBUILD_OUTPUT \
+               ARCH=arm64 \
+               PROJECT=ellis \
+               olddefconfig
+
+          # 2. Run the actual compilation
           make O=$KBUILD_OUTPUT \
                PROJECT=ellis \
                TARGET_BOARD_PLATFORM=mt6765 \
