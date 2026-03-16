@@ -1,4 +1,4 @@
-name: Ellis Final Dependency Build V13
+name: Ellis Ironclad Build V14
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v29-${{ runner.os }}
+          key: toolchain-ellis-v30-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -28,42 +28,40 @@ jobs:
           curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
 
-      - name: 4. Create Root-Dependency Fragment
+      - name: 4. Create Ironclad Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Root Platform & Architecture ---
+          # --- Root Architecture ---
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_ARM64=y
           CONFIG_MTK_PLATFORM="mt6765"
           
-          # --- Deep SoC Power & Logic ---
-          CONFIG_REGULATOR=y
-          CONFIG_MTK_PMIC_WRAP=y
-          CONFIG_MTK_GCE=y
-          CONFIG_MTK_QOS_FRAMEWORK=y
-          CONFIG_MTK_SOC_STATION=y
-          
-          # --- Memory & Sync Bus ---
-          CONFIG_MTK_CMDQ=y
-          CONFIG_MTK_SMI=y
-          CONFIG_MTK_SMI_BWP=y
+          # --- M4U / IOMMU Deep Support ---
+          CONFIG_MTK_M4U_SUPPORT=y
           CONFIG_MTK_M4U=y
           CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
-          CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
-          CONFIG_IOMMU_IO_PGTABLE_FAST=y
+          CONFIG_MTK_SMI=y
           
-          # --- GKI Visibility Gates ---
+          # --- DISABLE POISON PILLS (Bypass Secure TEE requirements) ---
+          # CONFIG_MTK_IOMMU_MISC_SEC is not set
+          # CONFIG_MTK_M4U_SECURE is not set
+          
+          # --- GKI Visibility ---
           CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
           CONFIG_GKI_HIDDEN_USB_CONFIGS=y
           
-          # --- Input & Touchscreen Chain ---
+          # --- Bus Infrastructure ---
+          CONFIG_MTK_GCE=y
+          CONFIG_MTK_CMDQ=y
+          CONFIG_MTK_SMI_BWP=y
+          
+          # --- Touchscreen & I2C ---
           CONFIG_INPUT_TOUCHSCREEN=y
           CONFIG_I2C_MTK=y
           CONFIG_MTK_I2C=y
           CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
-          CONFIG_TOUCHSCREEN_HIMAX_INCELL=y
           
           # --- USB HID Logic ---
           CONFIG_USB_LIBCOMPOSITE=y
@@ -74,7 +72,7 @@ jobs:
           CONFIG_HID_GENERIC=y
           EOF
 
-      - name: 5. Execute Motorola Merge Protocol
+      - name: 5. Execute Motorola Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
@@ -92,10 +90,10 @@ jobs:
       - name: 6. Verification
         run: |
           echo "Verifying hardware bridge survival..."
-          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || (echo "FAIL: ARCH_MEDIATEK lost" && exit 1)
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "FAIL: M4U lost" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "FAIL: HID lost" && exit 1)
-          echo "Success: Dependencies satisfied."
+          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || exit 1
+          grep "CONFIG_MTK_M4U_SUPPORT=y" out/.config || (echo "M4U_SUPPORT LOST" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID LOST" && exit 1)
+          echo "Hardware bridge confirmed."
 
       - name: 7. Compile
         run: |
@@ -108,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V13
+          name: Ellis-Final-V14
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
