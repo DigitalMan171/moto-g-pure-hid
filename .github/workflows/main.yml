@@ -48,7 +48,7 @@ jobs:
           CONFIG_MACH_MT6765=y
           CONFIG_MTK_PLATFORM="mt6765"
           
-          # IOMMU Fix (Use V2 to avoid generic header conflicts)
+          # IOMMU Fix (Use V2 to avoid generic header conflicts in drivers/iommu/)
           CONFIG_MTK_IOMMU_V2=y
           CONFIG_MTK_IOMMU_MISC=y
           
