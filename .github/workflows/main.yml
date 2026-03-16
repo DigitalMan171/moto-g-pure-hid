@@ -5,9 +5,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Pull Motorola Kernel Source
+      - name: 1. Pull EXACT Motorola Kernel Source
         run: |
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          # The -b flag ensures we pull the Ellis branch, not the default branch.
+          # Replace YOUR_ELLIS_BRANCH_NAME with the exact branch from the GitHub dropdown.
+          git clone --depth=1 -b YOUR_ELLIS_BRANCH_NAME https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
       - name: 2. Toolchain Prep
         run: |
@@ -16,55 +18,49 @@ jobs:
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
           rm clang.tar.gz
 
-      - name: 3. Motorola Official Configuration
+      - name: 3. Assemble Config Fragments
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
-          export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
-          export PATH=$CLANG_BIN:$PATH
-          
-          # 1. Motorola's required environment variable
-          export TARGET_PRODUCT=ellis
-
           mkdir -p $KBUILD_OUTPUT
 
-          # 2. Let Motorola's Makefiles do the merging
-          # This automatically finds the correct GKI, SoC, and Ellis fragments
-          make O=$KBUILD_OUTPUT CC=clang ellis_defconfig
+          # Since the files end in .config, they are strictly fragments.
+          # merge_config.sh is the official, untouched kernel tool for this.
+          # We use absolute paths to ensure the script cannot lose them.
+          bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
+            $GITHUB_WORKSPACE/arch/arm64/configs/gki_defconfig \
+            $GITHUB_WORKSPACE/arch/arm64/configs/ext_config/moto-mt6765.config \
+            $GITHUB_WORKSPACE/arch/arm64/configs/ext_config/ellis_defconfig.config
 
-          # 3. Inject HID settings directly into the resulting official file
+          # Inject the USB HID modules
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_HID_GENERIC
           bash scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
 
-          # 4. Seal the configuration
-          make O=$KBUILD_OUTPUT CC=clang olddefconfig
-
-      - name: 4. Compile
+      - name: 4. Compile Kernel
         run: |
           export ARCH=arm64
-          export TARGET_PRODUCT=ellis
-          export KBUILD_OUTPUT=out
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export PATH=$CLANG_BIN:$PATH
+          export KBUILD_OUTPUT=out
 
-          # Build the kernel natively
+          # olddefconfig locks in the merged file so we don't overlap compiler commands
+          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- -j$(nproc) olddefconfig
           make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w" -j$(nproc) Image.gz dtbs
-          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w" -j$(nproc) modules
 
-      - name: 5. Finalize with Motorola Install Script
+      - name: 5. Execute Motorola Install Script
         run: |
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
           
-          # Run the installer
+          # Run the installer script exactly as required
           bash arch/arm64/boot/install.sh \
             "$VERSION" \
             out/arch/arm64/boot/Image.gz \
             out/System.map \
             ./dist
 
-      - name: Upload Build
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Ellis-Kernel-HID
