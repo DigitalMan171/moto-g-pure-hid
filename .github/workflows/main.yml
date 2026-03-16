@@ -1,4 +1,4 @@
-name: Motorola Ellis HID Final Toolchain Fix
+name: Motorola Ellis HID Surgical Build
 on: [workflow_dispatch]
 
 jobs:
@@ -16,9 +16,9 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v6-${{ runner.os }}
+          key: toolchain-ellis-v7-${{ runner.os }}
 
-      - name: 3. Download Toolchain (Only if Cache Miss)
+      - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
@@ -30,82 +30,60 @@ jobs:
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           rm *.tar.gz
 
-      - name: 4. Unlock GKI and Rewrite Ellis DNA
+      - name: 4. Build Execution (The Surgical Injection)
         run: |
-          # Disable GKI flag checking
-          sed -i 's/POST_DEFCONFIG_CMDS="check_defconfig"/POST_DEFCONFIG_CMDS=""/' build.config.gki
+          export ARCH=arm64
+          export KBUILD_OUTPUT=out
+          export TARGET_DEFCONFIG=$KBUILD_OUTPUT/mapphone_defconfig
+          mkdir -p $KBUILD_OUTPUT
           
-          export DEVICE_CONFIG=arch/arm64/configs/ext_config/ellis_defconfig.config
-          cat <<EOF > $DEVICE_CONFIG
-          CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4
+          # A. Force-rewrite the ellis fragment first
+          echo "CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4" > arch/arm64/configs/ext_config/ellis_defconfig.config
+          
+          # B. Manually trigger the Motorola layer merge
+          bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
+            arch/arm64/configs/gki_defconfig \
+            arch/arm64/configs/ext_config/moto-mt6765.config \
+            arch/arm64/configs/ext_config/ellis_defconfig.config
+
+          # C. THE POISONING: Inject flags into the master file before Android.mk copies it
+          cat <<EOF >> $TARGET_DEFCONFIG
           CONFIG_EXPERT=y
-          CONFIG_DEBUG_KERNEL=y
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_F_HID=y
           CONFIG_HID_GENERIC=y
           CONFIG_USB_HID=y
-          CONFIG_IOMMU_SUPPORT=y
-          CONFIG_IOMMU_IO_PGTABLE=y
-          CONFIG_IOMMU_IO_PGTABLE_LPAE=y
-          CONFIG_MTK_IOMMU=y
-          CONFIG_MTK_IOMMU_V2=y
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           EOF
-          echo "" >> $DEVICE_CONFIG
-          cat $DEVICE_CONFIG
 
-      - name: 5. Setup Initial Merge
-        run: |
-          export ARCH=arm64
-          export KBUILD_OUTPUT=out
-          mkdir -p $KBUILD_OUTPUT
-          bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
-            arch/arm64/configs/gki_defconfig \
-            arch/arm64/configs/ext_config/moto-mt6765.config \
-            arch/arm64/configs/ext_config/ellis_defconfig.config
-
-      - name: 6. Build Kernel Execution (Fixed Toolchain & Assembler)
-        run: |
-          export ARCH=arm64
-          export KBUILD_OUTPUT=out
-          export CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
-          export GCC_PATH=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
-          export PATH=$CLANG_PATH:$GCC_PATH:$PATH
+          # D. Toolchain Setup
+          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
-          export CROSS_COMPILE=aarch64-linux-android-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-
-          # Resolve dependencies
-          make O=$KBUILD_OUTPUT CC=clang HOSTCC=gcc CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
-          
-          # Final Compile with Integrated Assembler to fix -EL error
+          # E. Execute build with fixed Assembler
           make O=$KBUILD_OUTPUT \
                CC=clang \
                HOSTCC=gcc \
                AS=aarch64-linux-android-as \
                LD=aarch64-linux-android-ld \
-               OBJCOPY=aarch64-linux-android-objcopy \
-               OBJDUMP=aarch64-linux-android-objdump \
-               STRIP=aarch64-linux-android-strip \
-               CROSS_COMPILE=$CROSS_COMPILE \
-               CLANG_TRIPLE=$CLANG_TRIPLE \
                LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-android- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
                KCFLAGS="-w" \
                -j$(nproc) Image.gz dtbs
 
-      - name: 7. Package Artifacts
+      - name: 5. Package Artifacts
         if: always()
         run: |
           mkdir -p ./dist
           [ -f out/arch/arm64/boot/Image.gz ] && cp out/arch/arm64/boot/Image.gz ./dist/
-          [ -f out/.config ] && cp out/.config ./dist/verified_config.txt
+          [ -f out/.config ] && cp out/.config ./dist/final_verified_config.txt
 
       - name: Upload Build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Final-Fix
+          name: Ellis-HID-Surgical-Result
           path: dist/*
