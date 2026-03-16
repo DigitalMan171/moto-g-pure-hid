@@ -1,4 +1,4 @@
-name: Motorola Ellis HID Surgical Build
+name: Motorola Ellis HID Authoritative Build
 on: [workflow_dispatch]
 
 jobs:
@@ -9,14 +9,14 @@ jobs:
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Toolchain Cache Logic
+      - name: 2. Toolchain Setup (Cached)
         id: cache-toolchain
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v7-${{ runner.os }}
+          key: toolchain-ellis-v9-${{ runner.os }}
 
       - name: 3. Download Toolchain (If Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -30,24 +30,25 @@ jobs:
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           rm *.tar.gz
 
-      - name: 4. Build Execution (The Surgical Injection)
+      - name: 4. The Surgical Ellis Injection
         run: |
           export ARCH=arm64
-          export KBUILD_OUTPUT=out
-          export TARGET_DEFCONFIG=$KBUILD_OUTPUT/mapphone_defconfig
-          mkdir -p $KBUILD_OUTPUT
+          export KERNEL_DEFCONFIG=ellis_defconfig
           
-          # A. Force-rewrite the ellis fragment first
-          echo "CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4" > arch/arm64/configs/ext_config/ellis_defconfig.config
-          
-          # B. Manually trigger the Motorola layer merge
-          bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
+          # A. Merge fragments to create the baseline
+          bash scripts/kconfig/merge_config.sh -m -r \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config
-
-          # C. THE POISONING: Inject flags into the master file before Android.mk copies it
-          cat <<EOF >> $TARGET_DEFCONFIG
+          
+          # B. Authoritative Poisoning: Injecting HID and Identity
+          cat <<EOF >> .config
+          # Identity Re-assertion
+          CONFIG_ARCH_MEDIATEK=y
+          CONFIG_MACH_MT6765=y
+          CONFIG_MTK_PLATFORM="mt6765"
+          
+          # HID Stack
           CONFIG_EXPERT=y
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
@@ -55,35 +56,46 @@ jobs:
           CONFIG_USB_F_HID=y
           CONFIG_HID_GENERIC=y
           CONFIG_USB_HID=y
-          CONFIG_IOMMU_IO_PGTABLE_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           EOF
 
-          # D. Toolchain Setup
-          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          
-          # E. Execute build with fixed Assembler
+          # C. Move to the location kenv.mk line 91 expects
+          mkdir -p out
+          mv .config out/.config
+          cp out/.config arch/arm64/configs/ellis_defconfig
+
+      - name: 5. Execute Build (kenv.mk Compliant)
+        run: |
+          export ARCH=arm64
+          export KBUILD_OUTPUT=out
+          export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
+          export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
+          export PATH=$CLANG_BIN:$GCC_BIN:$PATH
+
+          # Build using project names and LLVM flags identified in kenv.mk
           make O=$KBUILD_OUTPUT \
+               PROJECT=ellis \
+               TARGET_BOARD_PLATFORM=mt6765 \
+               KERNEL_DEFCONFIG=ellis_defconfig \
                CC=clang \
-               HOSTCC=gcc \
-               AS=aarch64-linux-android-as \
-               LD=aarch64-linux-android-ld \
+               LLVM=1 \
                LLVM_IAS=1 \
                CROSS_COMPILE=aarch64-linux-android- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
                KCFLAGS="-w" \
                -j$(nproc) Image.gz dtbs
 
-      - name: 5. Package Artifacts
+      - name: 6. Capture Artifacts
         if: always()
         run: |
-          mkdir -p ./dist
+          mkdir -p dist
+          [ -f out/.config ] && cp out/.config ./dist/final_config.txt
           [ -f out/arch/arm64/boot/Image.gz ] && cp out/arch/arm64/boot/Image.gz ./dist/
-          [ -f out/.config ] && cp out/.config ./dist/final_verified_config.txt
+          ls -R dist/
 
       - name: Upload Build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Surgical-Result
-          path: dist/*
+          name: Ellis-Surgical-Result
+          path: dist/
