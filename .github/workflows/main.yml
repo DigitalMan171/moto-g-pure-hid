@@ -30,29 +30,30 @@ jobs:
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           rm *.tar.gz
 
-      - name: 4. Configuration Assembly (With IOMMU Amendments)
+      - name: 4. Final Fragment Assembly
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
 
-          # Create the Amendment Fragment
-          # This bridges the gap between the old Ellis config and the new HID requirements
+          # The Authority Fragment: This ensures 'Fast Mode' is enabled
+          # so that drivers/iommu/io-pgtable.c can find its definitions.
           cat <<EOF > hid.config
-          # USB HID & Gadget Support
+          # USB HID Support
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_HID_GENERIC=y
           CONFIG_USB_HID=y
           
-          # MediaTek IOMMU 'Fast Mode' Fix
-          # These satisfy the undeclared identifiers in io-pgtable.c
+          # MediaTek IOMMU / LPAE Fast Mode Bridge
           CONFIG_IOMMU_IO_PGTABLE_LPAE=y
+          CONFIG_IOMMU_IO_PGTABLE_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
+          CONFIG_MTK_IOMMU_SUPPORT=y
           EOF
 
-          # Apply the Motorola Hierarchy + our Amendment
+          # The Sandwich: GKI -> SoC -> Device -> Our Fix
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -64,30 +65,34 @@ jobs:
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           
+          # Setup Toolchain PATH
           export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
           export PATH=$CLANG_BIN:$GCC_BIN:$PATH
 
+          # Setup Compiler Variables
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # Lock in the amendments
+          # 1. Finalize the configuration dependencies
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
           
-          # Start Compilation
+          # 2. Compile Kernel and Device Tree Blobs
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
-      - name: 6. Package & Verify
+      - name: 6. Package Artifacts
         run: |
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
+          
+          # Run the installer for the Image.gz
           bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
           
-          # Save config for verification
-          cp out/.config ./dist/final_build_config.txt
+          # Capture the .config for final verification
+          cp out/.config ./dist/final_sandwich_config.txt
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-v2
+          name: Ellis-HID-Kernel-Final
           path: dist/*
