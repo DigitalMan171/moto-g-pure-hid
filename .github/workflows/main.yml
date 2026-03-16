@@ -36,20 +36,34 @@ jobs:
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
 
+          # THE AUTHORITY FRAGMENT
+          # Ordered to satisfy Kconfig dependencies: Infrastructure -> Vendor Drivers -> Features
           cat <<EOF > hid.config
-          CONFIG_USB_CONFIGFS_F_HID=y
-          CONFIG_HID_GENERIC=y
-          CONFIG_USB_HID=y
+          # LAYER 1: Core IOMMU & Memory Infrastructure
           CONFIG_IOMMU_SUPPORT=y
           CONFIG_IOMMU_IO_PGTABLE=y
           CONFIG_IOMMU_IO_PGTABLE_LPAE=y
+          CONFIG_IOMMU_DMA=y
+          
+          # LAYER 2: MediaTek Vendor IOMMU Drivers
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
           CONFIG_MTK_IOMMU_SUPPORT=y
+          
+          # LAYER 3: The 'Fast Mode' Bridge (Critical for io-pgtable.c)
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
+          
+          # LAYER 4: USB Gadget & HID Stack
+          CONFIG_USB_GADGET=y
+          CONFIG_USB_CONFIGFS=y
+          CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_USB_F_HID=y
+          CONFIG_HID_GENERIC=y
+          CONFIG_USB_HID=y
           EOF
 
+          # The Sandwich Merge
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -61,11 +75,14 @@ jobs:
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
+          
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # olddefconfig resolves dependencies and locks in our hid.config changes
+          # Resolve dependencies and finalize .config
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
+          
+          # Build
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
       - name: 6. Package Artifacts
@@ -73,10 +90,10 @@ jobs:
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
           bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
-          cp out/.config ./dist/final_config_verification.txt
+          cp out/.config ./dist/verified_config.txt
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-v3
+          name: Ellis-HID-Kernel-v4
           path: dist/*
