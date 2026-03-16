@@ -11,17 +11,19 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole libssl-dev
+          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole libssl-dev lz4
 
-      - name: Setup Toolchain (Prebuilts)
+      - name: Fetch Toolchain (AOSP Clang r416183b)
         run: |
-          # We use the standard AOSP Clang to fix missing MediaTek tool errors
-          mkdir -p prebuilts/clang/host/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/clang-r416183b prebuilts/clang/host/linux-x86/clang-r416183b
-          
+          # Use a direct download of the prebuilt binary package to save time/space
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
+          cd prebuilts/clang/host/linux-x86/clang-r416183b
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
+          tar -xzf clang-r416183b.tar.gz
+          rm clang-r416183b.tar.gz
+
       - name: Configure and Build (The Sandwich)
         run: |
-          # Environment Variables
           export ARCH=arm64
           export CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
           export PATH=$CLANG_PATH:$PATH
@@ -43,9 +45,9 @@ jobs:
           ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
           ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_F2FS_FS
 
-          # 3. Finalize and Compile
-          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld olddefconfig
-          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+          # 3. Finalize and Compile with Clang/LLVM
+          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
+          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
       - name: Run Motorola Install Script
         run: |
@@ -53,9 +55,9 @@ jobs:
           export INSTALL_PATH=./dist
           mkdir -p $INSTALL_PATH
           
-          # Use your specific install.sh path
-          # [version] [image] [map] [destination]
-          VERSION=$(cat $KBUILD_OUTPUT/include/config/kernel.release 2>/dev/null || echo "moto-hid")
+          # Exact path you confirmed: arch/arm64/boot/install.sh
+          # Motorola typically uses: [version] [image] [map] [destination]
+          VERSION=$(cat $KBUILD_OUTPUT/include/config/kernel.release 2>/dev/null || echo "moto-ellis-hid")
           
           ./arch/arm64/boot/install.sh \
             $VERSION \
@@ -65,9 +67,13 @@ jobs:
 
       - name: Finalize Image.gz-dtb
         run: |
-          # Find and append the Ellis DTB for AIK
+          # Append the specific Ellis DTB to the kernel for AIK
           DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
+          if [ -n "$DTB_PATH" ]; then
+            cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
+          else
+            echo "Warning: Ellis DTB not found. Check build logs."
+          fi
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
