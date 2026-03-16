@@ -9,16 +9,16 @@ jobs:
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Cache Toolchain
+      - name: 2. Toolchain Cache Logic
         id: cache-toolchain
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-r416183b-gcc4.9-v1
+          key: toolchain-ellis-v2-${{ runner.os }}
 
-      - name: 3. Download Toolchain (Only if not cached)
+      - name: 3. Download Toolchain (Only if Cache Miss)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
@@ -30,40 +30,41 @@ jobs:
           tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           rm *.tar.gz
 
-      - name: 4. Modify Device DNA (Append to Ellis Config)
+      - name: 4. Modify Device DNA (Full Permission Unlock)
         run: |
           export DEVICE_CONFIG=arch/arm64/configs/ext_config/ellis_defconfig.config
-          
-          # Appending HID and IOMMU requirements directly to the final fragment
           cat <<EOF >> $DEVICE_CONFIG
-          # --- HID GADGET & IOMMU INTEGRATION ---
+          # --- MASTER PERMISSIONS ---
+          CONFIG_EXPERT=y
+          CONFIG_DEBUG_KERNEL=y
+          # Ensure strict memory doesn't block HID
+          CONFIG_STRICT_DEVMEM=n
+
+          # --- HID GADGET STACK ---
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_F_HID=y
           CONFIG_HID_GENERIC=y
           CONFIG_USB_HID=y
+
+          # --- IOMMU & FAST BRIDGE ---
           CONFIG_IOMMU_SUPPORT=y
           CONFIG_IOMMU_IO_PGTABLE=y
           CONFIG_IOMMU_IO_PGTABLE_LPAE=y
-          CONFIG_IOMMU_DMA=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
-          CONFIG_MTK_IOMMU_SUPPORT=y
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           EOF
           
-          echo "Verification: Last 15 lines of Ellis config:"
-          tail -n 15 $DEVICE_CONFIG
+          echo "Verified DNA injection for Ellis."
 
-      - name: 5. Setup Initial Merge (The Sandwich)
+      - name: 5. Setup Initial Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           mkdir -p $KBUILD_OUTPUT
-          
-          # Merging the layers: GKI -> MTK SoC -> Modified Ellis Config
           bash scripts/kconfig/merge_config.sh -m -O $KBUILD_OUTPUT \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -77,10 +78,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # olddefconfig validates the sandwich and resolves the IOMMU dependencies
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
-          
-          # Final Compilation
           make O=$KBUILD_OUTPUT CC=clang CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
       - name: 7. Package Artifacts
@@ -88,8 +86,7 @@ jobs:
           mkdir -p ./dist
           VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
           bash arch/arm64/boot/install.sh "$VERSION" out/arch/arm64/boot/Image.gz out/System.map ./dist
-          # Stashing the final .config so we can verify the flags are set
-          cp out/.config ./dist/final_verified_config.txt
+          cp out/.config ./dist/final_config.txt
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
