@@ -1,4 +1,4 @@
-name: Ellis Linker-Optimized Build V16
+name: Ellis Full Heartbeat V17
 on: [workflow_dispatch]
 
 jobs:
@@ -16,67 +16,52 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v32-${{ runner.os }}
+          key: toolchain-ellis-v33-${{ runner.os }}
 
-      - name: 3. Download Toolchain (If Cache Miss)
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
-          curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
-          tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
-          mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
-          tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-
-      - name: 4. Create Linker-Safe Fragment
+      - name: 3. Create Heartbeat Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Platform & Linker Core ---
+          # --- The Master Clock (The Fix) ---
+          CONFIG_COMMON_CLK_MT6765=y
+          CONFIG_MTK_CLKSRC_STABLE_IDLE=y
+          
+          # --- Resolve QoS Type Mismatch ---
+          CONFIG_MTK_QOS_FRAMEWORK=y
+          CONFIG_MTK_PLATFORM_MT6765=y
+          
+          # --- Root Architecture ---
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MTK_PLATFORM="mt6765"
           CONFIG_ARCH_MT6765=y
-          CONFIG_MTK_PLATFORM_MT6765=y
-          CONFIG_STRIP_ASM_SYMS=n
           
-          # --- M4U / IOMMU Symbol Exports & Support ---
+          # --- M4U / IOMMU Logic ---
           CONFIG_MTK_M4U_SUPPORT=y
           CONFIG_MTK_M4U=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
-          CONFIG_MTK_IOMMU_GKI_SYMBOL_EXPORT=y
           CONFIG_MTK_SMI=y
           
-          # --- USB Vendor Glue ---
+          # --- USB & HID ---
           CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_HID=y
-          CONFIG_HID_GENERIC=y
           
-          # --- GKI Visibility & Infrastructure ---
+          # --- GKI Visibility ---
           CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
           CONFIG_GKI_HIDDEN_USB_CONFIGS=y
-          CONFIG_MTK_GCE=y
-          CONFIG_MTK_CMDQ=y
-          CONFIG_MTK_PMIC_WRAP=y
-          
-          # --- Touchscreen ---
-          CONFIG_INPUT_TOUCHSCREEN=y
-          CONFIG_I2C_MTK=y
-          CONFIG_MTK_I2C=y
-          CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
           EOF
 
-      - name: 5. Execute Permissive Merge
+      - name: 4. Permissive Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
           mkdir -p out
-          # Permissive merge: custom_hid.cfg has the final word
+          # No -r: Allow our fragment to fix the GKI type-mismatch
           bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -85,26 +70,16 @@ jobs:
           
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
-      - name: 6. Verification
+      - name: 5. Verification
         run: |
-          echo "Verifying hardware bridge and symbol survival..."
-          grep "CONFIG_MTK_IOMMU_GKI_SYMBOL_EXPORT=y" out/.config || (echo "SYMBOL EXPORT LOST" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID DRIVER LOST" && exit 1)
-          echo "Verification passed: Symbols and drivers are intact."
+          echo "Checking if Clock and M4U survived the merge..."
+          grep "CONFIG_COMMON_CLK_MT6765=y" out/.config || (echo "CLOCK LOST" && exit 1)
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U LOST" && exit 1)
+          echo "Heartbeat confirmed."
 
-      - name: 7. Compile
+      - name: 6. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          # Use LLVM tools to handle MediaTek symbol linking correctly
           make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
-
-      - name: 8. Package & Upload
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Ellis-Linker-V16
-          path: |
-            out/arch/arm64/boot/Image.gz
-            out/.config
