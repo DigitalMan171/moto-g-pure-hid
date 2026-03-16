@@ -1,4 +1,4 @@
-name: Ellis Authoritative Hybrid V7
+name: Ellis Dependency-First Build V9
 on: [workflow_dispatch]
 
 jobs:
@@ -16,28 +16,19 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v24-${{ runner.os }}
+          key: toolchain-ellis-v26-${{ runner.os }}
 
-      - name: 3. Download Toolchain (If Cache Miss)
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
-          curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
-          tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
-          mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.0.0_r1.tar.gz -o binutils.tar.gz
-          tar -xzf binutils.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-
-      - name: 4. Create Custom Fragment
+      - name: 3. Create Custom Fragment with Full Dependency Chain
         run: |
           cat <<EOF > custom_hid.cfg
-          # Hardware Gatekeepers
+          # --- Platform & Bus Parents ---
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MTK_PLATFORM="mt6765"
+          CONFIG_ARCH_MT6765=y
           CONFIG_MTK_CMDQ=y
           CONFIG_MTK_SMI=y
           
-          # Memory Path Preservation
+          # --- Memory Management (Dependent on SMI/CMDQ) ---
           CONFIG_MTK_M4U=y
           CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU=y
@@ -45,17 +36,17 @@ jobs:
           CONFIG_IOMMU_IO_PGTABLE_ARMV8L_FAST=y
           CONFIG_IOMMU_IO_PGTABLE_FAST=y
           
-          # GKI Unhiding
-          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
+          # --- GKI Visibility Toggles ---
           CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
+          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
           
-          # Input & Touchscreen Support
+          # --- Touchscreen Infrastructure ---
           CONFIG_INPUT_TOUCHSCREEN=y
           CONFIG_I2C_MTK=y
           CONFIG_TOUCHSCREEN_MTK_HIMAX_HX83102P=y
           CONFIG_TOUCHSCREEN_HIMAX_INCELL=y
           
-          # USB HID Stack
+          # --- USB HID Gadget Stack ---
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -64,7 +55,7 @@ jobs:
           CONFIG_HID_GENERIC=y
           EOF
 
-      - name: 5. Execute Authoritative Merge
+      - name: 4. Formal Motorola Merge Protocol
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
@@ -72,40 +63,36 @@ jobs:
           
           mkdir -p out
           
-          # Phase 1: Standard Motorola Merge (Ordered for priority)
+          # We merge in order of increasing specificity. 
+          # custom_hid.cfg is last so it has final say over the others.
           bash scripts/kconfig/merge_config.sh -m -r -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             custom_hid.cfg
           
-          # Phase 2: Authoritative Append (Overrides GKI safety scripts)
-          echo "" >> out/.config
-          echo "# --- AUTHORITATIVE OVERRIDES ---" >> out/.config
-          cat custom_hid.cfg >> out/.config
-          
-          # Phase 3: Validation
+          # Finalize the configuration tree
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
-      - name: 6. Verification Check
+      - name: 5. Verification Check
         run: |
-          echo "Verifying driver survival..."
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "CRITICAL FAIL: M4U still stripped" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "CRITICAL FAIL: HID still stripped" && exit 1)
-          echo "Hardware bridge confirmed."
+          echo "Verifying that dependencies allowed drivers to stay..."
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U still missing - logical dependency fail" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID missing" && exit 1)
+          echo "Success: Dependency chain is satisfied."
 
-      - name: 7. Compile
+      - name: 6. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 KERNEL_DEFCONFIG=ellis_defconfig CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
 
-      - name: 8. Package & Upload
+      - name: 7. Package & Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V7
+          name: Ellis-Final-V9
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
