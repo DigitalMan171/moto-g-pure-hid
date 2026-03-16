@@ -1,4 +1,4 @@
-name: "Ellis: Official Open-Source Build V5.8.7"
+name: "Ellis: Official Open-Source Build V5.9.0"
 on: [push, workflow_dispatch]
 
 jobs:
@@ -8,23 +8,42 @@ jobs:
       - name: 📦 Environment Setup (Legacy Library Bridge)
         run: |
           sudo apt-get update
-          # Install modern dependencies
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses-dev libsdl1.2-dev libxml2 libxml2-utils lzop pngcrush rsync libelf-dev dwarves xsltproc zip zlib1g-dev device-tree-compiler
           
-          # MANUALLY INSTALL LEGACY LIBRARIES FOR GCC 4.9
-          # These are no longer in the default 'apt' list for ubuntu-latest
+          # Manually install legacy libraries for GCC 4.9
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2.1_amd64.deb
           wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2.1_amd64.deb
-          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || sudo dpkg -i libtinfo5_6.2-0ubuntu2.1_amd64.deb
-          sudo dpkg -i libncurses5_6.3-2ubuntu0.1_amd64.deb || sudo dpkg -i libncurses5_6.2-0ubuntu2.1_amd64.deb
+          sudo dpkg -i libtinfo5_6.2-0ubuntu2.1_amd64.deb || true
+          sudo dpkg -i libncurses5_6.2-0ubuntu2.1_amd64.deb || true
           rm *.deb
 
-      - name: 🌐 Clone Source & Stable Toolchains (GCC 4.9)
+      - name: 🌐 Clone Source & Stable Toolchains
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk source
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
+          
+          chmod -R +x clang/bin/ gcc64/bin/ gcc32/bin/
+          
+          # Persistent PATH Injection
+          echo "$(pwd)/clang/bin" >> $GITHUB_PATH
+          echo "$(pwd)/gcc64/bin" >> $GITHUB_PATH
+          echo "$(pwd)/gcc32/bin" >> $GITHUB_PATH
+
+      - name: 🔍 Verify Toolchains
+        run: |
+          clang --version
+          aarch64-linux-android-gcc --version
+          arm-linux-androideabi-gcc --version
+
+      - name: ⚙️ Set Global Build Variables
+        run: |
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-android-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+          echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
 
       - name: 🧪 Structural Header Fixes
         working-directory: source
@@ -33,27 +52,19 @@ jobs:
           sed -i 's/inline void blk_crypto_flock/void blk_crypto_flock/g' include/linux/blk-crypto.h
           sed -i 's/inline void uclamp_se_set/void uclamp_se_set/g' kernel/sched/sched.h
 
-      - name: 🚀 Build with Stable Toolchain
+      - name: 🚀 Build with Persistent Environment
         working-directory: source
         run: |
-          export PATH=$(pwd)/../clang/bin:$(pwd)/../gcc64/bin:$(pwd)/../gcc32/bin:$PATH
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CC=clang
-
           # 1. Initialize Factory Config
           make O=out k65v1_64_bsp_defconfig
           
-          # 2. JIT Patching: Global Symbol Export
-          # Essential for satisfying drivers/misc/built-in.a
+          # 2. JIT Patching (Global Symbols)
           sed -i '1i #include <linux/export.h>' drivers/power/supply/mtk_battery.c
           sed -i '1i void aee_kernel_exception_api_func(void *s, ...) {} EXPORT_SYMBOL(aee_kernel_exception_api_func);' drivers/power/supply/mtk_battery.c
           sed -i '1i void aee_kernel_warning_api_func(void *s, ...) {} EXPORT_SYMBOL(aee_kernel_warning_api_func);' drivers/power/supply/mtk_battery.c
           sed -i '1i int aee_kernel_dal_show(void *s) { return 0; } EXPORT_SYMBOL(aee_kernel_dal_show);' drivers/power/supply/mtk_battery.c
           
-          # 3. Enable HID and Bypass Warnings
+          # 3. Enable HID & HIDRAW
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -64,7 +75,7 @@ jobs:
           
           make O=out olddefconfig
 
-          # 4. Final Compile Run
+          # 4. Compile
           make -j$(nproc) O=out \
             NM=llvm-nm \
             OBJCOPY=llvm-objcopy \
@@ -81,5 +92,5 @@ jobs:
       - name: 📦 Upload Final Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-HID-Kernel-V5.8.7
+          name: Ellis-HID-Kernel-V5.9.0
           path: source/out/arch/arm64/boot/Image.gz-dtb
