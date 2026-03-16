@@ -11,24 +11,36 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole libssl-dev lz4
+          sudo apt-get install -y build-essential bc gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev libncurses5-dev flex bison pahole libssl-dev lz4 python3
 
-      - name: Fetch Toolchain (AOSP Clang r416183b)
+      - name: Fetch Toolchains (Clang & GCC)
         run: |
-          # Use a direct download of the prebuilt binary package to save time/space
+          # Create toolchain directories
           mkdir -p prebuilts/clang/host/linux-x86/clang-r416183b
-          cd prebuilts/clang/host/linux-x86/clang-r416183b
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
-          tar -xzf clang-r416183b.tar.gz
-          rm clang-r416183b.tar.gz
+          mkdir -p prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+
+          # Download Clang r416183b using the verified Archive hash
+          # This hash (bd96dfe...) points directly to the r416183b binaries
+          curl -L https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/bd96dfe349c962681f0e5388af874c771ef96670/clang-r416183b.tar.gz -o clang.tar.gz
+          tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r416183b
+          
+          # Download GCC 4.9 (Required for older MTK kernel headers/binutils)
+          curl -L https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/heads/master.tar.gz -o gcc.tar.gz
+          tar -xzf gcc.tar.gz -C prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+          
+          rm *.tar.gz
 
       - name: Configure and Build (The Sandwich)
         run: |
+          # Set explicit paths for Clang and GCC
           export ARCH=arm64
-          export CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
-          export PATH=$CLANG_PATH:$PATH
+          export CLANG_BIN=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
+          export GCC_BIN=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
+          export PATH=$CLANG_BIN:$GCC_BIN:$PATH
+          
+          # Variables required by Motorola build system
+          export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
           export KBUILD_OUTPUT=out
           
           mkdir -p $KBUILD_OUTPUT
@@ -45,41 +57,26 @@ jobs:
           ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_USB_HID
           ./scripts/config --file $KBUILD_OUTPUT/.config --enable CONFIG_F2FS_FS
 
-          # 3. Finalize and Compile with Clang/LLVM
-          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE -j$(nproc) olddefconfig
-          make O=$KBUILD_OUTPUT CC=clang LD=ld.lld CROSS_COMPILE=$CROSS_COMPILE CLANG_TRIPLE=$CLANG_TRIPLE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
+          # 3. Finalize and Compile
+          # We pass CC=clang and CLANG_TRIPLE to ensure it uses the AOSP prebuilts correctly
+          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE -j$(nproc) olddefconfig
+          make O=$KBUILD_OUTPUT CC=clang CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE KCFLAGS="-w" -j$(nproc) Image.gz dtbs
 
       - name: Run Motorola Install Script
         run: |
-          export KBUILD_OUTPUT=out
-          export INSTALL_PATH=./dist
-          mkdir -p $INSTALL_PATH
-          
-          # Exact path you confirmed: arch/arm64/boot/install.sh
-          # Motorola typically uses: [version] [image] [map] [destination]
-          VERSION=$(cat $KBUILD_OUTPUT/include/config/kernel.release 2>/dev/null || echo "moto-ellis-hid")
-          
-          ./arch/arm64/boot/install.sh \
-            $VERSION \
-            $KBUILD_OUTPUT/arch/arm64/boot/Image.gz \
-            $KBUILD_OUTPUT/System.map \
-            $INSTALL_PATH
+          # Use your exact install.sh path
+          VERSION=$(cat out/include/config/kernel.release 2>/dev/null || echo "ellis-hid")
+          mkdir -p ./dist
+          ./arch/arm64/boot/install.sh $VERSION out/arch/arm64/boot/Image.gz out/System.map ./dist
 
-      - name: Finalize Image.gz-dtb
+      - name: Create Image.gz-dtb
         run: |
-          # Append the specific Ellis DTB to the kernel for AIK
+          # Find the specific Ellis DTB
           DTB_PATH=$(find out/arch/arm64/boot/dts/mediatek/ -name "*ellis*.dtb" | head -n 1)
-          if [ -n "$DTB_PATH" ]; then
-            cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
-          else
-            echo "Warning: Ellis DTB not found. Check build logs."
-          fi
+          cat out/arch/arm64/boot/Image.gz "$DTB_PATH" > ./dist/Image.gz-dtb
 
-      - name: Upload Build Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Ellis-HID-Kernel
-          path: |
-            dist/Image.gz
-            dist/Image.gz-dtb
-            dist/System.map
+          path: dist/*
