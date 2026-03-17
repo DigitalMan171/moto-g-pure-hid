@@ -14,8 +14,6 @@ jobs:
       - name: 2. Setup Factory Build Environment (Lunch Stubs)
         run: |
           mkdir -p build device/motorola/ellis
-          
-          # Create the environment setup script
           cat <<EOF > build/envsetup.sh
           function lunch() {
             export ARCH=arm64
@@ -23,9 +21,9 @@ jobs:
             export MTK_PROJECT=ellis
             export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
-            export CROSS_COMPILE=aarch64-linux-android-
+            # Point to Clang specifically to stop the GCC search
             export CLANG_TRIPLE=aarch64-linux-gnu-
-            # Engineering Mode Identifiers for Blocktag/HID
+            export CROSS_COMPILE=aarch64-linux-android-
             export MTK_EARA_IO_SUPPORT=yes
             export MTK_BLOCK_TAG_SUPPORT=yes
             echo "============================================"
@@ -33,7 +31,6 @@ jobs:
             echo "============================================"
           }
           EOF
-          
           echo "add_lunch_combo ellis-eng" > device/motorola/ellis/vendorsetup.sh
 
       - name: 3. Fetch Source Assets
@@ -42,7 +39,6 @@ jobs:
             git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
             https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           fi
-          
           if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
             git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             prebuilts/clang/host/linux-x86
@@ -53,7 +49,10 @@ jobs:
           source build/envsetup.sh
           lunch ellis-eng
           
+          # Find the exact Clang path
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
+          
+          # Update PATH to include the bin folder
           export PATH="$CLANG_DIR/bin:$PATH"
           
           # Carry-over HID fragment
@@ -66,27 +65,25 @@ jobs:
 
           cd kernel
           
-          # Generate defconfig for the Ellis project
-          make O=out ARCH=$ARCH PROJECT=$PROJECT ellis_defconfig
+          # THE FIX: Tell Make to use Clang's LLVM tools for EVERYTHING
+          # This prevents the 'gcc: not found' errors in Kconfig
+          COMMON_FLAGS="ARCH=$ARCH PROJECT=$PROJECT CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+
+          # Generate defconfig
+          make O=out $COMMON_FLAGS ellis_defconfig
           
-          # Official Merge of carry-over settings
+          # Merge settings
           ./scripts/kconfig/merge_config.sh -m -O out out/.config hid_unlock.config
           
-          # Finalize and Compile
-          make O=out ARCH=$ARCH PROJECT=$PROJECT olddefconfig
+          # Finalize
+          make O=out $COMMON_FLAGS olddefconfig
           
-          make O=out -j$(nproc) \
-          ARCH=$ARCH \
-          CC=clang \
-          LLVM=1 \
-          LLVM_IAS=1 \
-          CROSS_COMPILE=$CROSS_COMPILE \
-          CLANG_TRIPLE=$CLANG_TRIPLE \
-          PROJECT=$PROJECT \
+          # Compile
+          make O=out -j$(nproc) $COMMON_FLAGS \
           MTK_EARA_IO_SUPPORT=$MTK_EARA_IO_SUPPORT \
           MTK_BLOCK_TAG_SUPPORT=$MTK_BLOCK_TAG_SUPPORT
 
-      - name: 5. Archive Build Artifacts (Image.gz)
+      - name: 5. Archive Build Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
