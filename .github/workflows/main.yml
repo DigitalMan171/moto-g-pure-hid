@@ -22,14 +22,36 @@ jobs:
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
-
       - name: 3. Setup Native Toolchain (The Link)
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
-          # Add the native clang to the environment path
-          CLANG_PATH=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*)
-          echo "$CLANG_PATH/bin" >> $GITHUB_PATH
+          
+          # We must find the EXACT 'bin' folder containing ld.lld
+          TOOLCHAIN_BIN=$(find $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86 -name "ld.lld" -exec dirname {} \;)
+          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+          echo "Linker found at: $TOOLCHAIN_BIN"
+
+      - name: 4. Execute Native Motorola Build
+        run: |
+          # Verify the tool is actually linked before starting
+          ld.lld --version
+          
+          make O=out ARCH=$ARCH \
+            KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
+            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
+            defconfig
+
+          # Merge the HID fragment
+          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
+
+          # Build with the full LD=ld.lld flag to ensure VDSO finds it
+          make O=out -j$(nproc) \
+            ARCH=$ARCH \
+            CC=clang \
+            LD=ld.lld \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER
 
       - name: 4. Execute Native Motorola Build
         run: |
