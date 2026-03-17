@@ -1,88 +1,49 @@
-name: AOSP Native Motorola Protocol
+name: Motorola Native Source Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Maximize Workspace Storage
+      - name: 1. Maximize Workspace
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
-      - name: 2. Install Repo & AOSP Dependencies
+      - name: 2. Clone Motorola Source (Direct Branch)
         run: |
-          mkdir -p ~/bin
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          echo "$HOME/bin" >> $GITHUB_PATH
+          # Pulling the exact source you provided
+          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+          https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+
+      - name: 3. Setup Native Build Environment
+        run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex g++-multilib \
           gcc-multilib git gnupg gperf libncurses5-dev libssl-dev \
           libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip
 
-      - name: 3. Initialize AOSP Skeleton
+      - name: 4. Execute Motorola Native Wrapper
+        env:
+          # These are the "Magic" variables the Motorola build system listens for
+          # to prevent 'rejection' of the build environment.
+          PROJECT: ellis
+          VARIANT: eng
+          ARCH: arm64
+          LLVM: 1
+          # If the script requires a path to the prebuilts, we set it here
+          # but usually, the script looks for them in the root.
         run: |
-          # Use the base Android 12 manifest since the Moto one is failing
-          repo init -u https://android.googlesource.com/platform/manifest -b android-12.1.0_r27 --depth=1 --no-clone-bundle
+          # In this specific Motorola tree, the build entry point is 
+          # usually scripts/build_kernel.sh or build/build.sh
           
-          # Create a local manifest to "inject" the Motorola Kernel into the AOSP tree
-          mkdir -p .repo/local_manifests
-          cat <<EOF > .repo/local_manifests/moto.xml
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <project path="kernel/motorola/ellis" 
-                     name="MotorolaMobilityLLC/kernel-mtk" 
-                     revision="android-12-release-s3rhs32.20-42-10-4-11" 
-                     remote="github" />
-            <remote name="github" fetch="https://github.com/" />
-          </manifest>
-          EOF
-
-      - name: 5. Native Motorola Build
-        run: |
-          # 1. Define the internal AOSP Toolchain paths
-          # We find the specific clang version folder (it usually starts with 'clang-r')
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-*)
-          export PATH="$CLANG_DIR/bin:$PATH"
+          # We call the script that handles the 'add_moto_defconfig_fragments'
+          # and the toolchain verification automatically.
+          chmod +x scripts/build_kernel.sh
+          ./scripts/build_kernel.sh ellis
           
-          # 2. Tell the Makefile to use LLVM/Clang instead of the missing GCC
-          # We point CROSS_COMPILE to the LLVM binutils prefix
-          export CC=clang
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
-          
-          # 3. Run the compile from the kernel directory
-          # We use the 'ellis_defconfig' first to ensure the verifier is happy
-          cd kernel/motorola/ellis
-          make O=out ellis_defconfig
-          
-          # 4. Inject your HID fragment now that the environment is "locked"
-          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
-          
-          # 5. Final Native Compile
-          make O=out -j$(nproc) \
-            ARCH=arm64 \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            CLANG_TRIPLE=aarch64-linux-gnu-
-
-      - name: 4. Selective Sync
-        run: |
-          # Sync only the build tools and our injected kernel
-          repo sync -c -j$(nproc) --no-tags --no-clone-bundle \
-            build/make \
-            prebuilts/clang/host/linux-x86 \
-            kernel/motorola/ellis
-
-
-      - name: 6. Archive Kernel
+      - name: 5. Archive Native Output
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-native-kernel
-          path: kernel/motorola/ellis/out/arch/arm64/boot/Image.gz*
+          name: moto-ellis-kernel
+          path: out/target/product/ellis/obj/KERNEL_OBJ/arch/arm64/boot/Image.gz*
