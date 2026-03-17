@@ -1,53 +1,65 @@
-name: Motorola Ellis Native Protocol Build
+name: Motorola Ellis AOSP-Native Build
 on: [workflow_dispatch]
 
 jobs:
-  build-kernel:
+  build:
     runs-on: ubuntu-latest
     env:
-      # Motorola Internal Identifiers
+      # These simulate the AOSP 'lunch' environment
       PROJECT: ellis
-      TARGET_BUILD_VARIANT: eng
       ARCH: arm64
-      # The native compiler flags the 'verifier' expects
+      SUBARCH: arm64
       LLVM: 1
       LLVM_IAS: 1
-
+    
     steps:
       - name: 1. Clone Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Inject HID Fragment
+      - name: 2. Locate Vendor Config
+        id: find_config
         run: |
-          # Create the fragment in the vendor extension path
-          # This ensures the 'merge' step includes our data natively
+          # Replicate the AOSP 'lunch' search logic to find the ellis config
+          # It's usually in arch/arm64/configs/vendor/
+          CONFIG_PATH=$(find arch/arm64/configs/vendor -name "*ellis*" | head -n 1)
+          
+          if [ -z "$CONFIG_PATH" ]; then
+            echo "ERROR: Could not find ellis_defconfig in vendor tree!"
+            exit 1
+          fi
+          
+          # Strip the prefix to get the name for 'make' (e.g., vendor/ellis_defconfig)
+          CONFIG_NAME=${CONFIG_PATH#arch/arm64/configs/}
+          echo "FULL_PATH=$CONFIG_PATH" >> $GITHUB_OUTPUT
+          echo "MAKE_TARGET=$CONFIG_NAME" >> $GITHUB_OUTPUT
+          echo "Selected Config: $CONFIG_NAME"
+
+      - name: 3. Inject HID Fragment
+        run: |
+          # Native AOSP fragments are merged using merge_config.sh
           mkdir -p arch/arm64/configs/vendor/ext_config/
           cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           EOF
 
-      - name: 3. Run Native Verifier & Compile
+      - name: 4. Compile (AOSP Process)
         run: |
-          # Motorola's kernel-mtk usually uses 'make' with specific vendor targets
-          # to trigger the 'add_moto_defconfig_fragments' logic.
+          # 1. Initialize the base config using the vendor path we found
+          make ${{ steps.find_config.outputs.MAKE_TARGET }}
           
-          # First: Generate the base config with vendor fragments
-          # This is the step that resolves the IOMMU 'FAST' paths
-          make ellis_defconfig
-          
-          # Second: Merge our custom HID fragment using the kernel's own tool
-          # This keeps the build 'verified' and 'native'
+          # 2. Use the NATIVE AOSP merger to add the HID data
+          # This ensures all dependencies (like IOMMU) are recalculated
           ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/ext_config/hid_custom.config
           
-          # Third: Finalize the config and compile
+          # 3. Finalize and Build
           make olddefconfig
-          make -j$(nproc)
+          make -j$(nproc) CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu-
 
-      - name: 4. Archive Kernel
+      - name: 5. Archive Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-kernel
+          name: ellis-kernel-aosp
           path: arch/arm64/boot/Image.gz*
