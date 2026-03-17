@@ -36,12 +36,13 @@ jobs:
             prebuilts/clang/host/linux-x86
           fi
           
-          # C. Lock the Environment Paths (The Link)
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*)
+          # C. The "Surgical" Link: Pick the newest Clang version only
+          # We sort them and take the last one to avoid the multi-line error
+          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
+          
           echo "CLANG_PATH=$CLANG_DIR" >> $GITHUB_ENV
           echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-          echo "Using Toolchain: $CLANG_DIR"
-
+          echo "Selected Toolchain: $CLANG_DIR"
       - name: 3. Execute Native Motorola Build (MTK-Linked)
         run: |
           # A. CREATE THE EXTRA KEY
