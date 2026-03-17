@@ -1,48 +1,41 @@
-name: Motorola Factory Vendor Build (Experimental Unlock)
+name: Motorola Factory Vendor Build (SMI Hardware Fix)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain Sync
+      - name: 1. Toolchain Restore
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 2. Setup Factory Environment (Full Vendor Unlock Suite)
+      - name: 2. Setup Factory Environment (SMI & IOMMU Unlocks)
         run: |
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
-            # --- PRIMARY TARGET IDENTIFIERS ---
+            # --- CORE TARGET ---
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export MTK_PLATFORM=mt6765
-            export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
             
-            # --- VENDOR UNLOCK SUITE (The 'Master Switches') ---
-            export MTK_EARA_IO_SUPPORT=yes        # Unlocks High-Speed I/O
-            export MTK_BLOCK_TAG_SUPPORT=yes      # Unlocks I/O Tagging
-            export MTK_USB_DUAL_ROLE_SUPPORT=yes  # Unlocks Hardware Controller
-            export MTK_IOMMU_SUPPORT=yes         # Unlocks DMA Mapping
-            export MTK_COMBO_CHIP=MT6765          # Hardware ID Handshake
+            # --- VENDOR UNLOCKS (The Missing SMI Link) ---
+            export MTK_SMI_SUPPORT=yes           # Fixes MTK_LARB_NR_MAX
+            export MTK_IOMMU_SUPPORT=yes         # Enables IOMMU
+            export MTK_USB_DUAL_ROLE_SUPPORT=yes # Unlocks USB Hardware
             
-            # --- HARDWARE METADATA (Synced from Phone) ---
+            # --- HARDWARE SYNC ---
             export BOARD_KERNEL_PAGESIZE=2048
             export BOARD_BOOT_HEADER_VER=2
+            export MTK_COMBO_CHIP=MT6765
             
-            # --- TOOLCHAIN PROTOCOL ---
             export CROSS_COMPILE=aarch64-linux-gnu-
             export CLANG_TRIPLE=aarch64-linux-gnu-
-            
-            echo "============================================"
-            echo "LUNCHED: ellis-eng (Vendor Unlocks Active)"
-            echo "Status: Experimental / Engineering Mode"
-            echo "============================================"
+            echo "LUNCHED: ellis-eng (SMI & IOMMU Infrastructure Set)"
           }
           EOF
 
@@ -57,7 +50,7 @@ jobs:
             prebuilts/clang/host/linux-x86
           fi
 
-      - name: 4. Execute Build with Full USB HID Suite
+      - name: 4. Execute Build (SMI/IOMMU Handshake)
         run: |
           source build/envsetup.sh
           lunch ellis-eng
@@ -65,51 +58,50 @@ jobs:
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # This fragment satisfies the FULL USB HID SUITE requirements
-          cat <<EOF > kernel/usb_hid_suite.config
-          # LAYER 1: Hardware Controller (HDRC)
+          # Fix the "incomplete type" by forcing the SMI and IOMMU relationship
+          cat <<EOF > kernel/smi_iommu.config
+          # SMI Infrastructure (Required for IOMMU)
+          CONFIG_MTK_SMI=y
+          
+          # IOMMU Suite
+          CONFIG_MTK_IOMMU=y
+          CONFIG_MTK_IOMMU_MISC=y
+          CONFIG_REMOTE_IOMMU=y
+          
+          # USB HID Suite
           CONFIG_USB_MTK_HDRC=y
           CONFIG_USB_MTK_PHY=y
-          CONFIG_USB_MTK_OTG=y
-          
-          # LAYER 2: USB Gadget Stack (The HID Base)
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_G_HID=y
           
-          # LAYER 3: DMA & IOMMU Unlocks
-          CONFIG_MTK_IOMMU=y
-          CONFIG_MTK_IOMMU_MISC=y
-          CONFIG_REMOTE_IOMMU=y
-          
-          # LAYER 4: Engineering & Performance Fixes
+          # Engineering Blocks
           CONFIG_MTK_EARA_IO_SUPPORT=y
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
-          CONFIG_DEBUG_FS=y
           EOF
 
           cd kernel
           COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
 
-          # Generate Defconfig (Inherits sourced Lunch Variables)
+          # Generate Defconfig
           make O=out $COMMON_FLAGS ellis_defconfig || \
           make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
 
-          # Merge the HID Suite
-          ./scripts/kconfig/merge_config.sh -m -O out out/.config usb_hid_suite.config
+          # Merge the SMI/IOMMU/HID Suite
+          ./scripts/kconfig/merge_config.sh -m -O out out/.config smi_iommu.config
           
-          # Final Handshake (Judge stage - should no longer discard)
+          # Final Handshake
           make O=out $COMMON_FLAGS olddefconfig
           
           # Final Compilation
           make O=out -j$(nproc) $COMMON_FLAGS
 
-      - name: 5. Archive Build Artifacts
+      - name: 5. Archive
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-experimental
+          name: moto-g-pure-ellis-smi-fixed
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
