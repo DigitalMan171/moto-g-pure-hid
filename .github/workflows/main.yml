@@ -1,33 +1,56 @@
-name: Motorola Factory Master Build (Supplemental Integration)
+name: Motorola Ellis Factory Chain (Official Standard)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain & Supplemental Assets
+      - name: 1. Workspace Topology Setup
         run: |
-          # Fetch Main Kernel
+          # Kernel Core
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           
-          # Fetch Supplemental Modules (The 'Missing' Hardware Drivers)
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git modules
+          # Official Build Automation Tools
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
           
-          # Fetch Android Clang
+          # Supplemental Vendor Hardware Modules
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
+          
+          # Google/Motorola Certified Clang
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
 
-      - name: 2. Setup Reconstructed ProjectConfig
+      - name: 2. Sanitization & Bridging
         run: |
-          cat <<EOF > build_env.sh
-          # Target Identifiers
+          # Remove Windows line endings from all vendor configs
+          find kernel -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
+          find vendor/motorola/modules -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
+          
+          # Bridge the repos in the standard Motorola internal path
+          mkdir -p kernel/vendor/motorola
+          ln -s $GITHUB_WORKSPACE/vendor/motorola/modules kernel/vendor/motorola/modules
+          
+          # Set up toolchain path
+          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
+          echo "$CLANG_DIR/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/build/linux-x86/bin" >> $GITHUB_PATH
+
+      - name: 3. Execution (The Official build.sh Protocol)
+        run: |
+          cd kernel
+          
+          # Official Environment Variables for Ellis (MT6765)
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
           
-          # Hardware Unlocks (Simulating Motorola's Internal ProjectConfig.mk)
+          # Define standard output locations
+          export OUT_DIR=$GITHUB_WORKSPACE/out
+          export DIST_DIR=$GITHUB_WORKSPACE/dist
+          
+          # Hardware Feature Unlocks
           export MTK_TOUCH_PANEL=yes
           export MTK_USB_DUAL_ROLE_SUPPORT=yes
           export MTK_SMI_SUPPORT=yes
@@ -35,60 +58,20 @@ jobs:
           export MTK_EARA_IO_SUPPORT=yes
           export MTK_BLOCK_TAG_SUPPORT=yes
           
-          # Toolchain Environment
-          CLANG_DIR=\$(ls -d \$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
-          export PATH="\$CLANG_DIR/bin:\$PATH"
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          EOF
+          # The Build Invocation
+          # We use build.sh because it handles 'olddefconfig' and 'merge_config' automatically
+          bash ../build/build.sh -j$(nproc) \
+            LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            KBUILD_DEFCONFIG=ellis_defconfig
 
-      - name: 3. Create Hardware-Software Bridge Config
-        run: |
-          cat <<EOF > factory_master.config
-          # IN-CELL TOUCH & DISPLAY
-          CONFIG_INPUT_TOUCHSCREEN=y
-          CONFIG_MTK_TOUCHPANEL=y
-          CONFIG_TOUCHSCREEN_MTK_COMMON=y
-          CONFIG_MTK_LCM=y
-          
-          # INFRASTRUCTURE & HID
-          CONFIG_MTK_SMI=y
-          CONFIG_MTK_IOMMU=y
-          CONFIG_USB_MTK_HDRC=y
-          CONFIG_USB_G_HID=y
-          
-          # ENGINEERING WORKER SYNC
-          CONFIG_MTK_EARA_IO_SUPPORT=y
-          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
-          EOF
-
-      - name: 4. Build with Module Linking
-        run: |
-          source build_env.sh
-          cd kernel
-          
-          # THE FIX: Point the build to the supplemental module headers
-          export KCPPFLAGS="-I$GITHUB_WORKSPACE/modules/include"
-          
-          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
-          
-          # 1. Base Defconfig
-          make O=out $COMMON_FLAGS ellis_defconfig
-          
-          # 2. Merge Factory Fragments
-          ./scripts/kconfig/merge_config.sh -m -O out out/.config ../factory_master.config
-          
-          # 3. Final Dependency Sync
-          make O=out $COMMON_FLAGS olddefconfig
-          
-          # 4. Compilation
-          make O=out -j$(nproc) $COMMON_FLAGS
-
-      - name: 5. Archive Artifacts
+      - name: 4. Artifact Archiving
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-complete
+          name: moto-g-pure-ellis-factory-image
           path: |
-            kernel/out/arch/arm64/boot/Image.gz*
-            kernel/out/.config
+            dist/Image.gz*
+            dist/*.ko
+            out/.config
