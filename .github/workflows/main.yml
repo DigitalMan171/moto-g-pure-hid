@@ -1,41 +1,41 @@
-name: Motorola Factory Vendor Build (SMI Hardware Fix)
+name: Motorola Factory Vendor Build (Blocktag Fix)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain Restore
+      - name: 1. Toolchain Sync
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 2. Setup Factory Environment (SMI & IOMMU Unlocks)
+      - name: 2. Setup Factory Environment (Vendor Engineering Sync)
         run: |
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
-            # --- CORE TARGET ---
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export MTK_PLATFORM=mt6765
             export TARGET_BUILD_VARIANT=eng
             
-            # --- VENDOR UNLOCKS (The Missing SMI Link) ---
+            # --- THE VENDOR UNLOCK SUITE (All must be 'yes' to sync headers) ---
+            export MTK_EARA_IO_SUPPORT=yes        # Fixes mtk_btag_earaio_uevt_worker
+            export MTK_BLOCK_TAG_SUPPORT=yes      # Enables Blocktag index
             export MTK_SMI_SUPPORT=yes           # Fixes MTK_LARB_NR_MAX
-            export MTK_IOMMU_SUPPORT=yes         # Enables IOMMU
-            export MTK_USB_DUAL_ROLE_SUPPORT=yes # Unlocks USB Hardware
+            export MTK_IOMMU_SUPPORT=yes         # Enables IOMMU path
+            export MTK_USB_DUAL_ROLE_SUPPORT=yes # Unlocks USB HID
             
-            # --- HARDWARE SYNC ---
+            # --- HARDWARE & COMPILER SYNC ---
             export BOARD_KERNEL_PAGESIZE=2048
             export BOARD_BOOT_HEADER_VER=2
             export MTK_COMBO_CHIP=MT6765
-            
             export CROSS_COMPILE=aarch64-linux-gnu-
             export CLANG_TRIPLE=aarch64-linux-gnu-
-            echo "LUNCHED: ellis-eng (SMI & IOMMU Infrastructure Set)"
+            echo "LUNCHED: ellis-eng (Blocktag & EARA-IO Sync Active)"
           }
           EOF
 
@@ -50,7 +50,7 @@ jobs:
             prebuilts/clang/host/linux-x86
           fi
 
-      - name: 4. Execute Build (SMI/IOMMU Handshake)
+      - name: 4. Build with Hardware & Protocol Fixes
         run: |
           source build/envsetup.sh
           lunch ellis-eng
@@ -58,15 +58,16 @@ jobs:
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # Fix the "incomplete type" by forcing the SMI and IOMMU relationship
-          cat <<EOF > kernel/smi_iommu.config
-          # SMI Infrastructure (Required for IOMMU)
+          # FORCE FULL SYNC: Prevents 'undeclared identifier' by enabling parent drivers
+          cat <<EOF > kernel/engineering_sync.config
+          # Hardware Infrastructure
           CONFIG_MTK_SMI=y
-          
-          # IOMMU Suite
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_MISC=y
-          CONFIG_REMOTE_IOMMU=y
+          
+          # Performance & Engineering (Must be enabled TOGETHER)
+          CONFIG_MTK_EARA_IO_SUPPORT=y
+          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           
           # USB HID Suite
           CONFIG_USB_MTK_HDRC=y
@@ -75,33 +76,29 @@ jobs:
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_G_HID=y
-          
-          # Engineering Blocks
-          CONFIG_MTK_EARA_IO_SUPPORT=y
-          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
           cd kernel
           COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
 
-          # Generate Defconfig
+          # 1. Base Config (Inherits Lunch)
           make O=out $COMMON_FLAGS ellis_defconfig || \
           make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
 
-          # Merge the SMI/IOMMU/HID Suite
-          ./scripts/kconfig/merge_config.sh -m -O out out/.config smi_iommu.config
+          # 2. Merge Engineering Sync
+          ./scripts/kconfig/merge_config.sh -m -O out out/.config engineering_sync.config
           
-          # Final Handshake
+          # 3. Final Handshake
           make O=out $COMMON_FLAGS olddefconfig
           
-          # Final Compilation
+          # 4. Final Compilation
           make O=out -j$(nproc) $COMMON_FLAGS
 
-      - name: 5. Archive
+      - name: 5. Archive Build
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-smi-fixed
+          name: moto-g-pure-ellis-experimental-fixed
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
