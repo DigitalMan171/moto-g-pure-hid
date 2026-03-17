@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Chain (Official Standard)
+name: Motorola Ellis Factory Chain (Balanced Debug)
 on: [workflow_dispatch]
 
 jobs:
@@ -7,70 +7,73 @@ jobs:
     steps:
       - name: 1. Workspace Topology Setup
         run: |
-          # Kernel Core
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          
-          # Official Build Automation Tools
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
-          
-          # Supplemental Vendor Hardware Modules
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git moto-tools
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
-          
-          # Google/Motorola Certified Clang
+
+      - name: 2. Toolchain Cache
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: prebuilts/clang/host/linux-x86
+          key: ${{ runner.os }}-moto-clang-v1
+
+      - name: 3. Conditional Toolchain Download
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
 
-      - name: 2. Sanitization & Bridging
+      - name: 4. VM Path Alignment & Bridging
         run: |
-          # Remove Windows line endings from all vendor configs
-          find kernel -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
-          find vendor/motorola/modules -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
-          
-          # Bridge the repos in the standard Motorola internal path
           mkdir -p kernel/vendor/motorola
           ln -s $GITHUB_WORKSPACE/vendor/motorola/modules kernel/vendor/motorola/modules
           
-          # Set up toolchain path
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
-          echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/build/linux-x86/bin" >> $GITHUB_PATH
+          MOTO_BIN=$(find $GITHUB_WORKSPACE/moto-tools -name "bin" -type d | grep "linux-x86" | head -n 1)
+          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
+          
+          echo "$MOTO_BIN" >> $GITHUB_PATH
+          echo "$CLANG_BIN" >> $GITHUB_PATH
+          echo "MOTO_BUILD_SCRIPT=$(find $GITHUB_WORKSPACE/moto-tools -name "build.sh" | head -n 1)" >> $GITHUB_ENV
 
-      - name: 3. Execution (The Official build.sh Protocol)
+      - name: 5. Execution (Balanced Debug Settings)
         run: |
+          chmod +x ${{ env.MOTO_BUILD_SCRIPT }}
           cd kernel
           
-          # Official Environment Variables for Ellis (MT6765)
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
           
-          # Define standard output locations
-          export OUT_DIR=$GITHUB_WORKSPACE/out
-          export DIST_DIR=$GITHUB_WORKSPACE/dist
+          # Balanced Trimming: Keep symbols needed for dmesg/stack traces
+          # We use '--strip-unneeded' instead of a full wipe
+          export INSTALL_MOD_STRIP="--strip-unneeded"
           
-          # Hardware Feature Unlocks
-          export MTK_TOUCH_PANEL=yes
-          export MTK_USB_DUAL_ROLE_SUPPORT=yes
-          export MTK_SMI_SUPPORT=yes
-          export MTK_IOMMU_SUPPORT=yes
-          export MTK_EARA_IO_SUPPORT=yes
-          export MTK_BLOCK_TAG_SUPPORT=yes
+          # Inject Debug Fragments into the build
+          cat <<EOF > balanced_debug.config
+          CONFIG_DYNAMIC_DEBUG=y
+          CONFIG_PRINTK=y
+          CONFIG_BUG=y
+          CONFIG_DEBUG_FS=y
+          EOF
           
-          # The Build Invocation
-          # We use build.sh because it handles 'olddefconfig' and 'merge_config' automatically
-          bash ../build/build.sh -j$(nproc) \
+          # Note: build.sh will merge these if they aren't in the defconfig
+          
+          bash ${{ env.MOTO_BUILD_SCRIPT }} -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            KBUILD_DEFCONFIG=ellis_defconfig
+            KBUILD_DEFCONFIG=ellis_defconfig \
+            OUT_DIR=$GITHUB_WORKSPACE/out \
+            DIST_DIR=$GITHUB_WORKSPACE/dist
 
-      - name: 4. Artifact Archiving
+      - name: 6. Archive Final Image
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-factory-image
+          name: moto-g-pure-ellis-balanced
           path: |
             dist/Image.gz*
             dist/*.ko
