@@ -1,4 +1,4 @@
-name: AOSP Native Motorola Protocol (Persistent & Linked)
+name: AOSP Native Motorola Protocol (Master-Linked)
 on: [workflow_dispatch]
 
 jobs:
@@ -24,28 +24,22 @@ jobs:
 
       - name: 2. Clone Official Motorola Source & Setup Toolchain
         run: |
-          # A. Clone Kernel Source if missing
           if [ ! -d ".git" ]; then
-            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-            https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+          https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
           fi
 
-          # B. Pull Toolchain if missing
           if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
-            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            prebuilts/clang/host/linux-x86
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+          prebuilts/clang/host/linux-x86
           fi
           
-          # C. The "Surgical" Link: Pick the newest Clang version only
-          # We sort them and take the last one to avoid the multi-line error
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
-          
           echo "CLANG_PATH=$CLANG_DIR" >> $GITHUB_ENV
           echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-          echo "Selected Toolchain: $CLANG_DIR"
-      - name: 3. Execute Native Motorola Build (MTK-Linked)
+
+      - name: 3. Execute Native Motorola Build (Master-Linked)
         run: |
-          # A. CREATE THE EXTRA KEY
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -53,33 +47,36 @@ jobs:
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # B. THE MASTER PLATFORM COMMAND
-          # Passing PROJECT and MTK_PLATFORM to solve the Blocktag error
           make O=out ARCH=$ARCH \
-            PROJECT=ellis \
-            MTK_PROJECT=ellis \
-            MTK_PLATFORM=mt6765 \
-            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
-            KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
-            KERNEL_EXTRA_CONFIG=hid_unlock.config \
-            defconfig
+          PROJECT=ellis \
+          MTK_PROJECT=ellis \
+          MTK_PLATFORM=mt6765 \
+          TARGET_BOARD_PLATFORM=mt6765 \
+          TARGET_PRODUCT=ellis \
+          TARGET_BUILD_VARIANT=eng \
+          CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
+          KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
+          KERNEL_EXTRA_CONFIG=hid_unlock.config \
+          defconfig
 
-          # C. COMPILE WITH STABLE LINKS
           make O=out -j$(nproc) \
-            ARCH=$ARCH \
-            CC=clang \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CROSS_COMPILE=aarch64-linux-android- \
-            PROJECT=ellis \
-            MTK_PROJECT=ellis \
-            MTK_PLATFORM=mt6765 \
-            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
-            KERNEL_EXTRA_CONFIG=hid_unlock.config
+          ARCH=$ARCH \
+          CC=clang \
+          LD=ld.lld \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          CROSS_COMPILE=aarch64-linux-android- \
+          PROJECT=ellis \
+          MTK_PROJECT=ellis \
+          MTK_PLATFORM=mt6765 \
+          TARGET_BOARD_PLATFORM=mt6765 \
+          TARGET_PRODUCT=ellis \
+          TARGET_BUILD_VARIANT=eng \
+          CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
+          KERNEL_EXTRA_CONFIG=hid_unlock.config
 
       - name: 4. Archive Verified Artifacts
         uses: actions/upload-artifact@v4
