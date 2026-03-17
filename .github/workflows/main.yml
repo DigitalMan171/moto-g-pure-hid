@@ -1,90 +1,75 @@
-name: Ellis Engineering-First HID Build
+name: Motorola Protocol Ellis Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # Motorola Internal Protocol Variables
       PROJECT: ellis
       TARGET_BUILD_VARIANT: eng
       ARCH: arm64
-      # This points to our custom fragment name (without .config)
+      # The name of your custom fragment file (without .config)
       KERNEL_EXTRA_CONFIG: mtk_hid_extension
       KBUILD_OUTPUT: out
 
     steps:
-      - name: 1. Pull Source
+      - name: 1. Clone Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
       - name: 2. Toolchain Setup
-        id: cache-toolchain
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v35-${{ runner.os }}
+          key: toolchain-ellis
 
-      - name: 3. Register Extension Fragment
+      - name: 3. Create Official Extension Fragment
         run: |
-          # Following Motorola Protocol: Place fragments in ext_config
+          # Protocol requires fragments to be in arch/arm64/configs/ext_config/
           mkdir -p arch/arm64/configs/ext_config
-          cat <<EOF > arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
-          # --- USB Gadget & HID Stack ---
-          CONFIG_USB_G_ANDROID=y
-          CONFIG_USB_CONFIGFS=y
-          CONFIG_USB_F_HID=y
-          CONFIG_USB_CONFIGFS_F_HID=y
-          CONFIG_USB_MTK_OTG=y
-          CONFIG_USB_MTK_HDRC=y
-          
-          # --- Developer Unlock ---
-          # CONFIG_MOTOROLA_LOCKED_GKI is not set
-          CONFIG_DEBUG_FS=y
-          CONFIG_PANIC_ON_OOPS=n
-          EOF
+          echo "CONFIG_USB_G_ANDROID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
+          echo "CONFIG_USB_F_HID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
+          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
+          echo "CONFIG_USB_MTK_OTG=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
 
-      - name: 4. Generate Mapphone Defconfig
+      - name: 4. Execute Motorola Defconfig Protocol
         run: |
-          # Path Setup
-          CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
-          GCC_PATH=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
-          export PATH=$CLANG_PATH:$GCC_PATH:$PATH
+          # Set toolchain path for the Kconfig scripts
+          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
           
-          mkdir -p $KBUILD_OUTPUT
-          
-          # EXECUTING MOTOROLA PROTOCOL:
-          # This triggers kenv.mk and defconfig.mk to assemble the full chain.
-          # It merges: gki -> moto-mt6765 -> moto-ellis -> debug-ellis -> mtk_hid_extension
-          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=$PROJECT \
+          # This command triggers 'defconfig.mk' to merge fragments into 'out/.config'
+          # We do NOT target arch/arm64/configs/mapphone_defconfig directly
+          make O=$KBUILD_OUTPUT ARCH=$ARCH PROJECT=$PROJECT \
                TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT \
                KERNEL_EXTRA_CONFIG=$KERNEL_EXTRA_CONFIG \
                mapphone_defconfig
 
-      - name: 5. Automatic Dependency Resolution
+      - name: 5. Protocol Dependency Resolution
         run: |
-          # This ensures that enabling HID auto-enables required subsystems (like HID_GENERIC)
-          # which might not be explicitly mentioned in the fragments.
+          # This is the 'Motorola way' to let the kernel resolve 
+          # missing dependencies (like USB_GADGET) based on our new flags.
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
-          make O=$KBUILD_OUTPUT ARCH=arm64 olddefconfig
+          make O=$KBUILD_OUTPUT ARCH=$ARCH olddefconfig
 
-      - name: 6. Build Engineering Image
+      - name: 6. Build Unlocked Image
         run: |
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
-          # Target 'Image.gz' for use in boot.img
-          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=$PROJECT \
+          # Final build using Clang as the primary compiler
+          make O=$KBUILD_OUTPUT ARCH=$ARCH PROJECT=$PROJECT \
                CC=clang LLVM=1 LLVM_IAS=1 \
                CROSS_COMPILE=aarch64-linux-android- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
-               KCFLAGS="-w" -j$(nproc) Image.gz
+               -j$(nproc) Image.gz
 
-      - name: 7. Package Artifacts
+      - name: 7. Package Engineering Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Eng-HID-Kernel
+          name: Ellis-Unlocked-HID
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
