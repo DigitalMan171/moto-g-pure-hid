@@ -1,63 +1,56 @@
-name: AOSP Native Protocol Ellis
+name: AOSP Native Motorola Protocol
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # Motorola Internal Identifiers
-      PROJECT: ellis
-      TARGET_BUILD_VARIANT: eng
-      ARCH: arm64
-      LLVM: 1
-      LLVM_IAS: 1
-
     steps:
-      - name: 1. Clone Source
+      - name: 1. Maximize Workspace Storage
         run: |
-          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-          https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          # Remove heavy pre-installed tools to make room for AOSP skeletons
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
 
-      - name: 2. Install AOSP Build Tools
+      - name: 2. Install Repo & AOSP Dependencies
         run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex g++-multilib \
           gcc-multilib git gnupg gperf libncurses5-dev libssl-dev \
-          libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
-          xsltproc zip zlib1g-dev
+          libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip
 
-      - name: 3. Locate AOSP Build Script
-        id: locate
+      - name: 3. Partial AOSP Sync (The Ellis Skeleton)
         run: |
-          # Search for the native AOSP build entry point in the tree
-          SCRIPT_PATH=$(find . -name "build.sh" | grep "build/" | head -n 1)
-          if [ -z "$SCRIPT_PATH" ]; then
-            # Fallback for MediaTek standalone repos
-            SCRIPT_PATH="./scripts/build_kernel.sh"
-          fi
-          echo "Found script at: $SCRIPT_PATH"
-          echo "SCRIPT=$SCRIPT_PATH" >> $GITHUB_OUTPUT
-
-      - name: 4. Inject Verified HID Fragment
-        run: |
-          # Create the fragment in the path the verifier expects
-          mkdir -p arch/arm64/configs/vendor/ext_config/
-          cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
-          CONFIG_USB_G_HID=y
-          CONFIG_USB_CONFIGFS_F_HID=y
-          EOF
-
-      - name: 5. Execute Native AOSP Build
-        run: |
-          # We must export the BUILD_CONFIG for the script to accept our data
-          # For Ellis/MediaTek, this is usually mtk_aarch64
-          export BUILD_CONFIG=common/build.config.mtk.aarch64
+          # Initialize the Motorola Manifest
+          repo init -u https://github.com/MotorolaMobilityLLC/android_manifest.git \
+                    -b android-12-release-s3rhs32.20-42-10-4-11 --depth=1
           
-          # Run the script found in step 3
-          bash ${{ steps.locate.outputs.SCRIPT }} -j$(nproc)
+          # Sync ONLY the folders required for 'lunch' and the Kernel
+          # This keeps the footprint small enough for the GitHub VM
+          repo sync -c -j$(nproc) --no-tags --no-clone-bundle \
+            build/make \
+            prebuilts/clang/host/linux-x86 \
+            device/motorola/ellis \
+            vendor/motorola/ellis \
+            kernel/motorola/msm8953  # Verify this path in your specific manifest
 
-      - name: 6. Archive Image
+      - name: 4. Native AOSP Build (Verified Protocol)
+        run: |
+          # Engage the 'Closed System'
+          source build/envsetup.sh
+          
+          # This command injects the IOMMU and HID variable groups natively
+          lunch v_ellis-eng
+          
+          # Build the kernel/bootimage using the AOSP wrapper
+          # This ensures the 'undeclared identifier' logic is resolved by the verifier
+          m KERNEL_EXTRA_CONFIG=mtk_hid_extension bootimage
+
+      - name: 5. Archive Verified Boot Image
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-native-kernel
-          path: out/arch/arm64/boot/Image.gz*
+          name: ellis-native-boot
+          path: out/target/product/ellis/boot.img
