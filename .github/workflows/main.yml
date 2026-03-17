@@ -7,7 +7,6 @@ jobs:
     steps:
       - name: 1. Maximize Workspace Storage
         run: |
-          # Remove heavy pre-installed tools to make room for AOSP skeletons
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
@@ -22,35 +21,49 @@ jobs:
           gcc-multilib git gnupg gperf libncurses5-dev libssl-dev \
           libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip
 
-      - name: 3. Partial AOSP Sync (The Ellis Skeleton)
+      - name: 3. Initialize AOSP Skeleton
         run: |
-          # Initialize the Motorola Manifest
-          repo init -u https://github.com/MotorolaMobilityLLC/android_manifest.git \
-                    -b android-12-release-s3rhs32.20-42-10-4-11 --depth=1
+          # Use the base Android 12 manifest since the Moto one is failing
+          repo init -u https://android.googlesource.com/platform/manifest -b android-12.1.0_r27 --depth=1 --no-clone-bundle
           
-          # Sync ONLY the folders required for 'lunch' and the Kernel
-          # This keeps the footprint small enough for the GitHub VM
+          # Create a local manifest to "inject" the Motorola Kernel into the AOSP tree
+          mkdir -p .repo/local_manifests
+          cat <<EOF > .repo/local_manifests/moto.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <project path="kernel/motorola/ellis" 
+                     name="MotorolaMobilityLLC/kernel-mtk" 
+                     revision="android-12-release-s3rhs32.20-42-10-4-11" 
+                     remote="github" />
+            <remote name="github" fetch="https://github.com/" />
+          </manifest>
+          EOF
+
+      - name: 4. Selective Sync
+        run: |
+          # Sync only the build tools and our injected kernel
           repo sync -c -j$(nproc) --no-tags --no-clone-bundle \
             build/make \
             prebuilts/clang/host/linux-x86 \
-            device/motorola/ellis \
-            vendor/motorola/ellis \
-            kernel/motorola/msm8953  # Verify this path in your specific manifest
+            kernel/motorola/ellis
 
-      - name: 4. Native AOSP Build (Verified Protocol)
+      - name: 5. Native Motorola Build
         run: |
-          # Engage the 'Closed System'
           source build/envsetup.sh
           
-          # This command injects the IOMMU and HID variable groups natively
-          lunch v_ellis-eng
+          # Manually export variables that 'lunch' usually handles for Ellis
+          # This forces the "Engineering" pathing you need
+          export TARGET_PRODUCT=ellis
+          export TARGET_BUILD_VARIANT=eng
+          export OUT_DIR=out
           
-          # Build the kernel/bootimage using the AOSP wrapper
-          # This ensures the 'undeclared identifier' logic is resolved by the verifier
-          m KERNEL_EXTRA_CONFIG=mtk_hid_extension bootimage
+          # Build using the AOSP native wrapper
+          # This ensures the verifier sees your HID and IOMMU changes
+          make -C kernel/motorola/ellis ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- \
+          REAL_CC=clang CLANG_TRIPLE=aarch64-linux-gnu- KERNEL_EXTRA_CONFIG=hid_custom
 
-      - name: 5. Archive Verified Boot Image
+      - name: 6. Archive Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-native-boot
-          path: out/target/product/ellis/boot.img
+          name: ellis-native-kernel
+          path: kernel/motorola/ellis/out/arch/arm64/boot/Image.gz*
