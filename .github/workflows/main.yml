@@ -1,19 +1,13 @@
-name: AOSP Native Protocol (Ellis)
+name: AOSP Native Protocol Ellis
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 1. THE AOSP GATEKEEPER
-      # This points to the native Motorola build instructions
-      BUILD_CONFIG: common/build.config.mtk.aarch64
-      
-      # 2. THE ENGINEERING INJECTION
-      # These variables are read by 'build.sh' to trigger 'eng' mode
-      TARGET_PRODUCT: ellis_factory
-      TARGET_BUILD_VARIANT: eng
+      # Motorola Internal Identifiers
       PROJECT: ellis
+      TARGET_BUILD_VARIANT: eng
       ARCH: arm64
       LLVM: 1
       LLVM_IAS: 1
@@ -24,7 +18,7 @@ jobs:
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Install AOSP Build Dependencies
+      - name: 2. Install AOSP Build Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential flex g++-multilib \
@@ -32,25 +26,38 @@ jobs:
           libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
           xsltproc zip zlib1g-dev
 
-      - name: 3. Inject HID Data (Verified Path)
+      - name: 3. Locate AOSP Build Script
+        id: locate
         run: |
-          # We add our custom HID settings to a fragment that build.sh will pick up
+          # Search for the native AOSP build entry point in the tree
+          SCRIPT_PATH=$(find . -name "build.sh" | grep "build/" | head -n 1)
+          if [ -z "$SCRIPT_PATH" ]; then
+            # Fallback for MediaTek standalone repos
+            SCRIPT_PATH="./scripts/build_kernel.sh"
+          fi
+          echo "Found script at: $SCRIPT_PATH"
+          echo "SCRIPT=$SCRIPT_PATH" >> $GITHUB_OUTPUT
+
+      - name: 4. Inject Verified HID Fragment
+        run: |
+          # Create the fragment in the path the verifier expects
           mkdir -p arch/arm64/configs/vendor/ext_config/
           cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           EOF
-          # Tell the AOSP tools to include this fragment in the native merge
-          echo "POST_DEFCONFIG_CMDS=\"scripts/config --file \${OUT_DIR}/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID\"" >> $GITHUB_ENV
 
-      - name: 4. Execute Native AOSP build.sh
+      - name: 5. Execute Native AOSP Build
         run: |
-          # This is the native AOSP entry point for kernel builds.
-          # It automatically handles toolchain paths and verified defconfig merging.
-          ./build/build.sh -j$(nproc)
+          # We must export the BUILD_CONFIG for the script to accept our data
+          # For Ellis/MediaTek, this is usually mtk_aarch64
+          export BUILD_CONFIG=common/build.config.mtk.aarch64
+          
+          # Run the script found in step 3
+          bash ${{ steps.locate.outputs.SCRIPT }} -j$(nproc)
 
-      - name: 5. Archive Image
+      - name: 6. Archive Image
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-aosp-native-kernel
+          name: ellis-native-kernel
           path: out/arch/arm64/boot/Image.gz*
