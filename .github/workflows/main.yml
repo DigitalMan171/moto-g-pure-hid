@@ -20,13 +20,14 @@ jobs:
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
+            export MTK_PLATFORM=mt6765
+            export MTK_CHIP_VER=mt6765
             export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
             
             # Hardware Parameters (Synced from Magiskboot Unpack)
             export BOARD_KERNEL_PAGESIZE=2048
             export BOARD_BOOT_HEADER_VER=2
-            export BOARD_MKBOOTIMG_ARGS="--header_version 2"
             
             # Toolchain Triple (Clang-Native)
             export CROSS_COMPILE=aarch64-linux-gnu-
@@ -40,9 +41,12 @@ jobs:
             echo "============================================"
             echo "LUNCHED: ellis-eng (Motorola Factory Mode)"
             echo "Hardware Sync: Header V2 | Page 2048"
+            echo "Platform Sync: MT6765 (Native Pathing Fix)"
             echo "============================================"
           }
           EOF
+          
+          echo "add_lunch_combo ellis-eng" > device/motorola/ellis/vendorsetup.sh
 
       - name: 3. Fetch Source Assets
         run: |
@@ -60,11 +64,11 @@ jobs:
           source build/envsetup.sh
           lunch ellis-eng
           
-          # Map Toolchain
+          # Map Toolchain Path
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # Prep carry-over fragment
+          # Prep carry-over HID fragment
           cat <<EOF > kernel/hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -74,8 +78,8 @@ jobs:
 
           cd kernel
           
-          # Define Common Build Arguments for Clang/LLVM
-          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+          # COMMON FLAGS: The 'Sledgehammer' that forces MTK pathing and LLVM purity
+          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765 MTK_CHIP_VER=mt6765"
 
           # STEP A: Try both standard and extended defconfig paths
           make O=out $COMMON_FLAGS ellis_defconfig || \
@@ -88,13 +92,15 @@ jobs:
           make O=out $COMMON_FLAGS olddefconfig
           
           # STEP D: Full Factory Compilation
-          make O=out -j$(nproc) $COMMON_FLAGS
+          make O=out -j$(nproc) $COMMON_FLAGS \
+          MTK_EARA_IO_SUPPORT=$MTK_EARA_IO_SUPPORT \
+          MTK_BLOCK_TAG_SUPPORT=$MTK_BLOCK_TAG_SUPPORT
 
       - name: 5. Archive Build Artifacts (Image.gz)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-custom
+          name: moto-g-pure-ellis-final
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
