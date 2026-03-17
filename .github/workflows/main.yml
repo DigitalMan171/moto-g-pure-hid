@@ -1,74 +1,79 @@
-name: Motorola Ellis Official Compatibility Build
+name: Motorola Ellis Factory Chain (Total Cache)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Alignment
-        run: |
-          # 1. Source Code
-          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-          https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          
-          # 2. Tools (Renamed to 'build' per documentation)
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
-          
-          # 3. Vendor Modules
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
-
-      - name: 2. Restore Toolchain Cache
-        id: cache-toolchain
+      - name: 1. Toolchain & Source Cache
+        id: cache-all
         uses: actions/cache@v4
         with:
-          path: prebuilts/clang/host/linux-x86
-          key: ${{ runner.os }}-moto-clang-v1
+          path: |
+            prebuilts/clang/host/linux-x86
+            kernel
+            build
+            vendor/motorola/modules
+          key: ${{ runner.os }}-moto-complete-v1-${{ hashFiles('**/Makefile', '**/Kconfig') }}
+          restore-keys: |
+            ${{ runner.os }}-moto-complete-v1-
 
-      - name: 3. Toolchain Fallback
-        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      - name: 2. Selective Clone (Only if Cache Miss)
+        if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-          prebuilts/clang/host/linux-x86
+          # Only clone what isn't already there from the cache
+          if [ ! -d "kernel" ]; then
+            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+            https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
+          fi
+          
+          if [ ! -d "build" ]; then
+            git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
+          fi
+          
+          if [ ! -d "vendor/motorola/modules" ]; then
+            git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
+          fi
+          
+          if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
+            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            prebuilts/clang/host/linux-x86
+          fi
 
-      - name: 4. Bridge & Pathing
+      - name: 3. Bridge & Pathing (Required every run)
         run: |
-          # Create vendor module link
+          # Even with cache, we must re-link the virtual paths
           mkdir -p kernel/vendor/motorola
+          # Remove old link if it exists to prevent nested links
+          rm -f kernel/vendor/motorola/modules
           ln -s $GITHUB_WORKSPACE/vendor/motorola/modules kernel/vendor/motorola/modules
           
-          # Inject Prebuilt Tool Binaries into Path
-          # Documentation indicates linux-x86/bin contains the required build tools
+          # Align VM Paths
           MOTO_TOOLS_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           
           echo "$MOTO_TOOLS_BIN" >> $GITHUB_PATH
           echo "$CLANG_BIN" >> $GITHUB_PATH
 
-      - name: 5. Execute build.sh
+      - name: 4. Execute build.sh
         run: |
-          # Fix executable bit on the script
           chmod +x build/build.sh
           
-          # Settings for Ellis (MT6765)
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
-          
-          # Output management
           export OUT_DIR=$GITHUB_WORKSPACE/out
           export DIST_DIR=$GITHUB_WORKSPACE/dist
+          export INSTALL_MOD_STRIP="--strip-unneeded"
           
-          # Run the build from the workspace root (not inside kernel folder)
-          # so that it finds the 'build/build.sh' relative path correctly
           ./build/build.sh -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            KBUILD_DEFCONFIG=ellis_defconfig \
-            INSTALL_MOD_STRIP="--strip-unneeded"
+            KBUILD_DEFCONFIG=ellis_defconfig
 
-      - name: 6. Archiving
+      - name: 5. Archive
         if: always()
         uses: actions/upload-artifact@v4
         with:
