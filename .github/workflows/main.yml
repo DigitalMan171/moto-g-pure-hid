@@ -46,8 +46,9 @@ jobs:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 4. Execute Native Motorola Build (Comprehensive Flag Set)
+      - name: 4. Execute Native Motorola Build (Master-Linked)
         run: |
+          # A. Setup Custom Configuration Fragments
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -55,7 +56,7 @@ jobs:
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # Step A: Generate .config with Master Engineering Flags
+          # B. Generate Master Config
           make O=out ARCH=$ARCH \
           PROJECT=ellis \
           MTK_PROJECT=ellis \
@@ -65,14 +66,16 @@ jobs:
           TARGET_BUILD_VARIANT=eng \
           MTK_EARA_IO_SUPPORT=yes \
           MTK_BLOCK_TAG_SUPPORT=yes \
-          MTK_SST_SUPPORT=yes \
-          MTK_KPD_SUPPORT=yes \
           CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
           KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
           KERNEL_EXTRA_CONFIG=hid_unlock.config \
           defconfig
 
-          # Step B: Compile with Master Engineering Flags
+          # C. VERIFICATION LINE: Confirm MTK flags are in the final .config
+          echo "Checking for MTK Master Blocks..."
+          grep -E "CONFIG_MTK_EARA_IO_SUPPORT|CONFIG_MTK_BLOCK_TAG_SUPPORT" out/.config
+
+          # D. Main Compilation
           make O=out -j$(nproc) \
           ARCH=$ARCH \
           CC=clang \
@@ -91,8 +94,6 @@ jobs:
           TARGET_BUILD_VARIANT=eng \
           MTK_EARA_IO_SUPPORT=yes \
           MTK_BLOCK_TAG_SUPPORT=yes \
-          MTK_SST_SUPPORT=yes \
-          MTK_KPD_SUPPORT=yes \
           CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
           KERNEL_EXTRA_CONFIG=hid_unlock.config
 
