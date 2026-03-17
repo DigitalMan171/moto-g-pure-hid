@@ -5,43 +5,49 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Maximize Workspace & Restore Cloud Toolchain
+      - name: 1. Maximize Workspace & Toolchain Restore
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 2. Setup Factory Build Environment (Lunch Stubs)
+      - name: 2. Setup Factory Environment (Lunch Protocol)
         run: |
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
-            # Target Identifiers
+            # Target Hardware Identifiers
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export MTK_PLATFORM=mt6765
-            export MTK_CHIP_VER=mt6765
             export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
             
-            # Hardware Parameters (Synced from Magiskboot Unpack)
+            # Boot Image Metadata (Synced from Phone)
             export BOARD_KERNEL_PAGESIZE=2048
             export BOARD_BOOT_HEADER_VER=2
             
-            # Toolchain Triple (Clang-Native)
+            # Toolchain Environment
             export CROSS_COMPILE=aarch64-linux-gnu-
-            export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             export CLANG_TRIPLE=aarch64-linux-gnu-
             
-            # Master Engineering Flags
+            # Hardware Path Unlocks (Sourced for Lunch)
+            export CONFIG_USB_MTK_HDRC=y
+            export CONFIG_USB_MTK_OTG=y
+            export CONFIG_USB_G_HID=y
+            export CONFIG_USB_CONFIGFS_F_HID=y
+            export CONFIG_MTK_IOMMU=y
+            export CONFIG_MTK_IOMMU_MISC=y
+            
+            # Master Engineering Blocks
             export MTK_EARA_IO_SUPPORT=yes
             export MTK_BLOCK_TAG_SUPPORT=yes
             
             echo "============================================"
             echo "LUNCHED: ellis-eng (Motorola Factory Mode)"
-            echo "Hardware Sync: Header V2 | Page 2048"
-            echo "Platform Sync: MT6765 (Native Pathing Fix)"
+            echo "Hardware: MT6765 | Header V2 | Page 2048"
+            echo "Unlocks: USB-HDRC, HID, IOMMU-MISC"
             echo "============================================"
           }
           EOF
@@ -64,43 +70,45 @@ jobs:
           source build/envsetup.sh
           lunch ellis-eng
           
-          # Map Toolchain Path
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # Prep carry-over HID fragment
+          # We still use a small fragment for the .config merge to ensure the flags 
+          # are written to the file, but they are now backed by the Lunch environment.
           cat <<EOF > kernel/hid_unlock.config
-          CONFIG_USB_G_HID=y
+          CONFIG_USB_MTK_HDRC=y
+          CONFIG_USB_MTK_OTG=y
+          CONFIG_USB_GADGET=y
+          CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_USB_G_HID=y
+          CONFIG_MTK_IOMMU=y
+          CONFIG_MTK_IOMMU_MISC=y
           CONFIG_MTK_EARA_IO_SUPPORT=y
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
           cd kernel
-          
-          # COMMON FLAGS: The 'Sledgehammer' that forces MTK pathing and LLVM purity
-          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765 MTK_CHIP_VER=mt6765"
+          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
 
-          # STEP A: Try both standard and extended defconfig paths
+          # STEP A: Base Config (Checks sourced lunch vars)
           make O=out $COMMON_FLAGS ellis_defconfig || \
           make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
 
           # STEP B: Official Fragment Merge
           ./scripts/kconfig/merge_config.sh -m -O out out/.config hid_unlock.config
           
-          # STEP C: Finalize Configuration
+          # STEP C: Final Handshake
           make O=out $COMMON_FLAGS olddefconfig
           
-          # STEP D: Full Factory Compilation
-          make O=out -j$(nproc) $COMMON_FLAGS \
-          MTK_EARA_IO_SUPPORT=$MTK_EARA_IO_SUPPORT \
-          MTK_BLOCK_TAG_SUPPORT=$MTK_BLOCK_TAG_SUPPORT
+          # STEP D: Compilation
+          make O=out -j$(nproc) $COMMON_FLAGS
 
       - name: 5. Archive Build Artifacts (Image.gz)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-final
+          name: moto-g-pure-ellis-factory
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
