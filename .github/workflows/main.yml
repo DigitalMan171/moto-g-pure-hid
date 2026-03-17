@@ -1,4 +1,4 @@
-name: AOSP Native Motorola Protocol (Master-Linked)
+name: AOSP Native Motorola Protocol (Cloud-Persistent)
 on: [workflow_dispatch]
 
 jobs:
@@ -12,18 +12,21 @@ jobs:
       CROSS_COMPILE: aarch64-linux-android-
 
     steps:
-      - name: 1. Maximize Workspace & Restore Cache
-        id: cache-restore
-        uses: actions/cache/restore@v4
+      - name: 1. Maximize Workspace
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: 2. Restore Toolchain from Cloud
+        id: toolchain-cache
+        uses: actions/cache@v4
         with:
-          path: |
-            prebuilts/clang/host/linux-x86
-            out
+          path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
           restore-keys: |
             ${{ runner.os }}-moto-toolchain-
 
-      - name: 2. Clone Official Motorola Source & Setup Toolchain
+      - name: 3. Setup Source & Conditional Clone
         run: |
           if [ ! -d ".git" ]; then
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
@@ -31,24 +34,19 @@ jobs:
           fi
 
           if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
+          echo "Toolchain not found in cloud. Downloading..."
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
+          else
+          echo "Toolchain successfully retrieved from cloud."
           fi
           
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           echo "CLANG_PATH=$CLANG_DIR" >> $GITHUB_ENV
           echo "$CLANG_DIR/bin" >> $GITHUB_PATH
 
-      - name: 3. Save Toolchain Checkpoint
-        if: steps.cache-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: prebuilts/clang/host/linux-x86
-          key: ${{ runner.os }}-moto-toolchain-v1
-
       - name: 4. Execute Native Motorola Build (Master-Linked)
         run: |
-          # A. Setup Custom Configuration Fragments
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -56,7 +54,6 @@ jobs:
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # B. Generate Master Config
           make O=out ARCH=$ARCH \
           PROJECT=ellis \
           MTK_PROJECT=ellis \
@@ -71,11 +68,9 @@ jobs:
           KERNEL_EXTRA_CONFIG=hid_unlock.config \
           defconfig
 
-          # C. VERIFICATION LINE: Confirm MTK flags are in the final .config
-          echo "Checking for MTK Master Blocks..."
+          echo "Verifying Cloud-Injected Flags..."
           grep -E "CONFIG_MTK_EARA_IO_SUPPORT|CONFIG_MTK_BLOCK_TAG_SUPPORT" out/.config
 
-          # D. Main Compilation
           make O=out -j$(nproc) \
           ARCH=$ARCH \
           CC=clang \
@@ -98,6 +93,7 @@ jobs:
           KERNEL_EXTRA_CONFIG=hid_unlock.config
 
       - name: 5. Archive Verified Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: moto-g-pure-custom-kernel
