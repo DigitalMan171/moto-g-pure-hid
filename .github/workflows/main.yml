@@ -1,65 +1,56 @@
-name: Motorola Ellis AOSP-Native Build
+name: AOSP Native Protocol (Ellis)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # These simulate the AOSP 'lunch' environment
+      # 1. THE AOSP GATEKEEPER
+      # This points to the native Motorola build instructions
+      BUILD_CONFIG: common/build.config.mtk.aarch64
+      
+      # 2. THE ENGINEERING INJECTION
+      # These variables are read by 'build.sh' to trigger 'eng' mode
+      TARGET_PRODUCT: ellis_factory
+      TARGET_BUILD_VARIANT: eng
       PROJECT: ellis
       ARCH: arm64
-      SUBARCH: arm64
       LLVM: 1
       LLVM_IAS: 1
-    
+
     steps:
       - name: 1. Clone Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Locate Vendor Config
-        id: find_config
+      - name: 2. Install AOSP Build Dependencies
         run: |
-          # Replicate the AOSP 'lunch' search logic to find the ellis config
-          # It's usually in arch/arm64/configs/vendor/
-          CONFIG_PATH=$(find arch/arm64/configs/vendor -name "*ellis*" | head -n 1)
-          
-          if [ -z "$CONFIG_PATH" ]; then
-            echo "ERROR: Could not find ellis_defconfig in vendor tree!"
-            exit 1
-          fi
-          
-          # Strip the prefix to get the name for 'make' (e.g., vendor/ellis_defconfig)
-          CONFIG_NAME=${CONFIG_PATH#arch/arm64/configs/}
-          echo "FULL_PATH=$CONFIG_PATH" >> $GITHUB_OUTPUT
-          echo "MAKE_TARGET=$CONFIG_NAME" >> $GITHUB_OUTPUT
-          echo "Selected Config: $CONFIG_NAME"
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex g++-multilib \
+          gcc-multilib git gnupg gperf libncurses5-dev libssl-dev \
+          libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
+          xsltproc zip zlib1g-dev
 
-      - name: 3. Inject HID Fragment
+      - name: 3. Inject HID Data (Verified Path)
         run: |
-          # Native AOSP fragments are merged using merge_config.sh
+          # We add our custom HID settings to a fragment that build.sh will pick up
           mkdir -p arch/arm64/configs/vendor/ext_config/
           cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           EOF
+          # Tell the AOSP tools to include this fragment in the native merge
+          echo "POST_DEFCONFIG_CMDS=\"scripts/config --file \${OUT_DIR}/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID\"" >> $GITHUB_ENV
 
-      - name: 4. Compile (AOSP Process)
+      - name: 4. Execute Native AOSP build.sh
         run: |
-          # 1. Initialize the base config using the vendor path we found
-          make ${{ steps.find_config.outputs.MAKE_TARGET }}
-          
-          # 2. Use the NATIVE AOSP merger to add the HID data
-          # This ensures all dependencies (like IOMMU) are recalculated
-          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/ext_config/hid_custom.config
-          
-          # 3. Finalize and Build
-          make olddefconfig
-          make -j$(nproc) CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu-
+          # This is the native AOSP entry point for kernel builds.
+          # It automatically handles toolchain paths and verified defconfig merging.
+          ./build/build.sh -j$(nproc)
 
-      - name: 5. Archive Kernel
+      - name: 5. Archive Image
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-kernel-aosp
-          path: arch/arm64/boot/Image.gz*
+          name: ellis-aosp-native-kernel
+          path: out/arch/arm64/boot/Image.gz*
