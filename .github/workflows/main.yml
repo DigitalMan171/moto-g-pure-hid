@@ -1,41 +1,43 @@
-name: Motorola Factory Vendor Build (Blocktag Fix)
+name: Motorola Factory Vendor Build (Order-of-Operations Fix)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain Sync
+      - name: 1. Toolchain & Workspace Prep
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 2. Setup Factory Environment (Vendor Engineering Sync)
+      - name: 2. Setup Factory Environment (Master Lunch Sync)
         run: |
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
+            # --- PRIMARY TARGET ---
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export MTK_PLATFORM=mt6765
             export TARGET_BUILD_VARIANT=eng
             
-            # --- THE VENDOR UNLOCK SUITE (All must be 'yes' to sync headers) ---
-            export MTK_EARA_IO_SUPPORT=yes        # Fixes mtk_btag_earaio_uevt_worker
-            export MTK_BLOCK_TAG_SUPPORT=yes      # Enables Blocktag index
-            export MTK_SMI_SUPPORT=yes           # Fixes MTK_LARB_NR_MAX
-            export MTK_IOMMU_SUPPORT=yes         # Enables IOMMU path
-            export MTK_USB_DUAL_ROLE_SUPPORT=yes # Unlocks USB HID
+            # --- VENDOR MASTER SWITCHES (Order of Operations Fix) ---
+            # Exporting these ensures the headers are indexed globally
+            export MTK_SMI_SUPPORT=yes           
+            export MTK_IOMMU_SUPPORT=yes         
+            export MTK_EARA_IO_SUPPORT=yes        
+            export MTK_BLOCK_TAG_SUPPORT=yes      
+            export MTK_USB_DUAL_ROLE_SUPPORT=yes 
+            export MTK_COMBO_CHIP=MT6765
             
-            # --- HARDWARE & COMPILER SYNC ---
+            # --- HARDWARE & COMPILER METADATA ---
             export BOARD_KERNEL_PAGESIZE=2048
             export BOARD_BOOT_HEADER_VER=2
-            export MTK_COMBO_CHIP=MT6765
             export CROSS_COMPILE=aarch64-linux-gnu-
             export CLANG_TRIPLE=aarch64-linux-gnu-
-            echo "LUNCHED: ellis-eng (Blocktag & EARA-IO Sync Active)"
+            echo "LUNCHED: ellis-eng (Vendor Protocol Verified)"
           }
           EOF
 
@@ -50,7 +52,7 @@ jobs:
             prebuilts/clang/host/linux-x86
           fi
 
-      - name: 4. Build with Hardware & Protocol Fixes
+      - name: 4. Build with Corrected Hardware Hierarchy
         run: |
           source build/envsetup.sh
           lunch ellis-eng
@@ -58,47 +60,51 @@ jobs:
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # FORCE FULL SYNC: Prevents 'undeclared identifier' by enabling parent drivers
-          cat <<EOF > kernel/engineering_sync.config
-          # Hardware Infrastructure
+          # We define the hierarchy here: SMI -> IOMMU -> USB -> Engineering Tools
+          cat <<EOF > kernel/ellis_master_sync.config
+          # 1. SMI Infrastructure (The Base)
           CONFIG_MTK_SMI=y
+          
+          # 2. IOMMU & DMA Unlocks
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_MISC=y
+          CONFIG_REMOTE_IOMMU=y
           
-          # Performance & Engineering (Must be enabled TOGETHER)
-          CONFIG_MTK_EARA_IO_SUPPORT=y
-          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
-          
-          # USB HID Suite
+          # 3. USB HID Suite
           CONFIG_USB_MTK_HDRC=y
           CONFIG_USB_MTK_PHY=y
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_G_HID=y
+          
+          # 4. Engineering & Blocktag Fixes (Merged to prevent 'undeclared identifier')
+          CONFIG_MTK_EARA_IO_SUPPORT=y
+          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
+          CONFIG_DEBUG_FS=y
           EOF
 
           cd kernel
           COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
 
-          # 1. Base Config (Inherits Lunch)
+          # STEP A: Base Defconfig
           make O=out $COMMON_FLAGS ellis_defconfig || \
           make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
 
-          # 2. Merge Engineering Sync
-          ./scripts/kconfig/merge_config.sh -m -O out out/.config engineering_sync.config
+          # STEP B: Synchronize Vendor Fragments
+          ./scripts/kconfig/merge_config.sh -m -O out out/.config ellis_master_sync.config
           
-          # 3. Final Handshake
+          # STEP C: Final Judge (Satisfy all dependencies before compile)
           make O=out $COMMON_FLAGS olddefconfig
           
-          # 4. Final Compilation
+          # STEP D: Final Compilation
           make O=out -j$(nproc) $COMMON_FLAGS
 
-      - name: 5. Archive Build
+      - name: 5. Archive Verified Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-experimental-fixed
+          name: moto-g-pure-ellis-master-sync
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
