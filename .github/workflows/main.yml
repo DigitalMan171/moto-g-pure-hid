@@ -1,4 +1,4 @@
-name: AOSP Native Motorola Protocol (MTK-Linked)
+name: AOSP Native Motorola Protocol (Persistent & Linked)
 on: [workflow_dispatch]
 
 jobs:
@@ -12,28 +12,39 @@ jobs:
       CROSS_COMPILE: aarch64-linux-android-
 
     steps:
-      - name: 1. Maximize Workspace
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
+      - name: 1. Maximize Workspace & Initialize Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            prebuilts/clang/host/linux-x86
+            out
+          key: ${{ runner.os }}-moto-toolchain-${{ env.MOTO_VER }}
+          restore-keys: |
+            ${{ runner.os }}-moto-toolchain-
 
-      - name: 2. Clone Official Motorola Source
+      - name: 2. Clone Official Motorola Source & Setup Toolchain
         run: |
-          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-          https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          # A. Clone Kernel Source if missing
+          if [ ! -d ".git" ]; then
+            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+            https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          fi
 
-      - name: 3. Setup Native Toolchain (The Link)
-        run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-          prebuilts/clang/host/linux-x86
+          # B. Pull Toolchain if missing
+          if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
+            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            prebuilts/clang/host/linux-x86
+          fi
           
-          # Link the entire LLVM bin directory to the PATH
-          TOOLCHAIN_BIN=$(find $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86 -name "ld.lld" -exec dirname {} \;)
-          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+          # C. Lock the Environment Paths (The Link)
+          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*)
+          echo "CLANG_PATH=$CLANG_DIR" >> $GITHUB_ENV
+          echo "$CLANG_DIR/bin" >> $GITHUB_PATH
+          echo "Using Toolchain: $CLANG_DIR"
 
-      - name: 4. Execute Native Motorola Build
+      - name: 3. Execute Native Motorola Build (MTK-Linked)
         run: |
-          # 1. THE EXTRA CONFIG (Keep these as the base)
+          # A. CREATE THE EXTRA KEY
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -41,9 +52,8 @@ jobs:
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # 2. THE MASTER PLATFORM COMMAND
-          # We add MTK_PROJECT and MTK_PLATFORM to unlock the header paths
-          # for the MT6765 (the G Pure's heart)
+          # B. THE MASTER PLATFORM COMMAND
+          # Passing PROJECT and MTK_PLATFORM to solve the Blocktag error
           make O=out ARCH=$ARCH \
             PROJECT=ellis \
             MTK_PROJECT=ellis \
@@ -53,18 +63,24 @@ jobs:
             KERNEL_EXTRA_CONFIG=hid_unlock.config \
             defconfig
 
-          # 3. COMPILE WITH PLATFORM LOCK
+          # C. COMPILE WITH STABLE LINKS
           make O=out -j$(nproc) \
             ARCH=$ARCH \
             CC=clang \
             LD=ld.lld \
-            CROSS_COMPILE=$CROSS_COMPILE \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-android- \
             PROJECT=ellis \
             MTK_PROJECT=ellis \
             MTK_PLATFORM=mt6765 \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KERNEL_EXTRA_CONFIG=hid_unlock.config
-      - name: 5. Archive Verified Artifacts
+
+      - name: 4. Archive Verified Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: moto-g-pure-custom-kernel
