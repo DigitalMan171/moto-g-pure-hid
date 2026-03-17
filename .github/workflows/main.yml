@@ -1,79 +1,78 @@
-name: Motorola Ellis Factory Chain (Balanced Debug)
+name: Motorola Ellis Official Compatibility Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Topology Setup
+      - name: 1. Workspace Alignment
         run: |
+          # 1. Source Code
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git moto-tools
+          
+          # 2. Tools (Renamed to 'build' per documentation)
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
+          
+          # 3. Vendor Modules
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
 
-      - name: 2. Toolchain Cache
+      - name: 2. Restore Toolchain Cache
         id: cache-toolchain
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-clang-v1
 
-      - name: 3. Conditional Toolchain Download
+      - name: 3. Toolchain Fallback
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
 
-      - name: 4. VM Path Alignment & Bridging
+      - name: 4. Bridge & Pathing
         run: |
+          # Create vendor module link
           mkdir -p kernel/vendor/motorola
           ln -s $GITHUB_WORKSPACE/vendor/motorola/modules kernel/vendor/motorola/modules
           
-          MOTO_BIN=$(find $GITHUB_WORKSPACE/moto-tools -name "bin" -type d | grep "linux-x86" | head -n 1)
+          # Inject Prebuilt Tool Binaries into Path
+          # Documentation indicates linux-x86/bin contains the required build tools
+          MOTO_TOOLS_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           
-          echo "$MOTO_BIN" >> $GITHUB_PATH
+          echo "$MOTO_TOOLS_BIN" >> $GITHUB_PATH
           echo "$CLANG_BIN" >> $GITHUB_PATH
-          echo "MOTO_BUILD_SCRIPT=$(find $GITHUB_WORKSPACE/moto-tools -name "build.sh" | head -n 1)" >> $GITHUB_ENV
 
-      - name: 5. Execution (Balanced Debug Settings)
+      - name: 5. Execute build.sh
         run: |
-          chmod +x ${{ env.MOTO_BUILD_SCRIPT }}
-          cd kernel
+          # Fix executable bit on the script
+          chmod +x build/build.sh
           
+          # Settings for Ellis (MT6765)
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
           
-          # Balanced Trimming: Keep symbols needed for dmesg/stack traces
-          # We use '--strip-unneeded' instead of a full wipe
-          export INSTALL_MOD_STRIP="--strip-unneeded"
+          # Output management
+          export OUT_DIR=$GITHUB_WORKSPACE/out
+          export DIST_DIR=$GITHUB_WORKSPACE/dist
           
-          # Inject Debug Fragments into the build
-          cat <<EOF > balanced_debug.config
-          CONFIG_DYNAMIC_DEBUG=y
-          CONFIG_PRINTK=y
-          CONFIG_BUG=y
-          CONFIG_DEBUG_FS=y
-          EOF
-          
-          # Note: build.sh will merge these if they aren't in the defconfig
-          
-          bash ${{ env.MOTO_BUILD_SCRIPT }} -j$(nproc) \
+          # Run the build from the workspace root (not inside kernel folder)
+          # so that it finds the 'build/build.sh' relative path correctly
+          ./build/build.sh -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             KBUILD_DEFCONFIG=ellis_defconfig \
-            OUT_DIR=$GITHUB_WORKSPACE/out \
-            DIST_DIR=$GITHUB_WORKSPACE/dist
+            INSTALL_MOD_STRIP="--strip-unneeded"
 
-      - name: 6. Archive Final Image
+      - name: 6. Archiving
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-balanced
+          name: moto-g-pure-factory-build
           path: |
             dist/Image.gz*
             dist/*.ko
