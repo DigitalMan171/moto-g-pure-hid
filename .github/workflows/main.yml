@@ -1,9 +1,17 @@
-name: Ellis Infrastructure-First V28
+name: Ellis Engineering-First HID Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      PROJECT: ellis
+      TARGET_BUILD_VARIANT: eng
+      ARCH: arm64
+      # This points to our custom fragment name (without .config)
+      KERNEL_EXTRA_CONFIG: mtk_hid_extension
+      KBUILD_OUTPUT: out
+
     steps:
       - name: 1. Pull Source
         run: |
@@ -18,77 +26,65 @@ jobs:
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           key: toolchain-ellis-v35-${{ runner.os }}
 
-      - name: 3. Create Infrastructure Fragment
+      - name: 3. Register Extension Fragment
         run: |
-          cat <<EOF > final_override.cfg
-          # --- Platform Identity & Architecture ---
-          CONFIG_ARCH_MEDIATEK=y
-          CONFIG_MTK_PLATFORM="mt6765"
-          CONFIG_ARCH_MT6765=y
-          CONFIG_MTK_PLATFORM_MT6765=y
-          
-          # --- The "Glue" Infrastructure (Missing Chain Links) ---
-          CONFIG_MTK_PMIC_WRAP=y
-          CONFIG_MTK_SCP=y
-          CONFIG_MTK_SMI=y
-          CONFIG_MTK_SMI_COMMON=y
-          
-          # --- Motorola Developer Unlocks ---
-          CONFIG_MEDIATEK_SOLUTION=y
-          CONFIG_MTK_ENG_BUILD=y
-          CONFIG_MOTOROLA_LOCKED_GKI=n
-          
-          # --- HID & USB ---
-          CONFIG_MTK_USB_GADGET=y
+          # Following Motorola Protocol: Place fragments in ext_config
+          mkdir -p arch/arm64/configs/ext_config
+          cat <<EOF > arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
+          # --- USB Gadget & HID Stack ---
+          CONFIG_USB_G_ANDROID=y
+          CONFIG_USB_CONFIGFS=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
-          CONFIG_USB_HID=y
-          CONFIG_HID_GENERIC=y
+          CONFIG_USB_MTK_OTG=y
+          CONFIG_USB_MTK_HDRC=y
           
-          # --- Mandatory Power/Clock ---
-          CONFIG_COMMON_CLK_MT6765=y
-          CONFIG_MTK_PMIC_WRAP_MT6765=y
+          # --- Developer Unlock ---
+          # CONFIG_MOTOROLA_LOCKED_GKI is not set
+          CONFIG_DEBUG_FS=y
+          CONFIG_PANIC_ON_OOPS=n
           EOF
 
-      - name: 4. The Correct Merge Order
+      - name: 4. Generate Mapphone Defconfig
         run: |
-          export ARCH=arm64
-          export KBUILD_OUTPUT=out
+          # Path Setup
+          CLANG_PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin
+          GCC_PATH=$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
+          export PATH=$CLANG_PATH:$GCC_PATH:$PATH
+          
+          mkdir -p $KBUILD_OUTPUT
+          
+          # EXECUTING MOTOROLA PROTOCOL:
+          # This triggers kenv.mk and defconfig.mk to assemble the full chain.
+          # It merges: gki -> moto-mt6765 -> moto-ellis -> debug-ellis -> mtk_hid_extension
+          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=$PROJECT \
+               TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT \
+               KERNEL_EXTRA_CONFIG=$KERNEL_EXTRA_CONFIG \
+               mapphone_defconfig
+
+      - name: 5. Automatic Dependency Resolution
+        run: |
+          # This ensures that enabling HID auto-enables required subsystems (like HID_GENERIC)
+          # which might not be explicitly mentioned in the fragments.
+          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
+          make O=$KBUILD_OUTPUT ARCH=arm64 olddefconfig
+
+      - name: 6. Build Engineering Image
+        run: |
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
-          mkdir -p out
-          
-          # GKI base -> Moto Platform -> Ellis Specific -> Our Overrides
-          bash scripts/kconfig/merge_config.sh -m -O out \
-            arch/arm64/configs/gki_defconfig \
-            arch/arm64/configs/ext_config/moto-mt6765.config \
-            arch/arm64/configs/ext_config/ellis_defconfig.config \
-            final_override.cfg
-          
-          # Settle dependencies - strictly identifying the project
-          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
+          # Target 'Image.gz' for use in boot.img
+          make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=$PROJECT \
+               CC=clang LLVM=1 LLVM_IAS=1 \
+               CROSS_COMPILE=aarch64-linux-android- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
+               KCFLAGS="-w" -j$(nproc) Image.gz
 
-      - name: 5. Verification
-        run: |
-          echo "Verifying Hardware Chain Survival..."
-          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || (echo "ARCH LOST" && exit 1)
-          grep "CONFIG_MTK_PMIC_WRAP=y" out/.config || (echo "PMIC_WRAP LOST (Bridge Break)" && exit 1)
-          grep "CONFIG_MEDIATEK_SOLUTION=y" out/.config || (echo "VENDOR SOLUTION STILL STRIPPED" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID LOST" && exit 1)
-          echo "Chain intact."
-
-      - name: 6. Compile
-        run: |
-          export ARCH=arm64
-          export KBUILD_OUTPUT=out
-          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
-
-      - name: 7. Package & Upload
+      - name: 7. Package Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Infrastructure-V28
+          name: Ellis-Eng-HID-Kernel
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
