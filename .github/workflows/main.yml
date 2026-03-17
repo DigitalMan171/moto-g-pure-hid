@@ -1,4 +1,4 @@
-name: Ellis IOMMU Force-Link V18
+name: Ellis Deep Integration V20
 on: [workflow_dispatch]
 
 jobs:
@@ -16,34 +16,37 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v34-${{ runner.os }}
+          key: toolchain-ellis-v35-${{ runner.os }}
 
-      - name: 3. Create Force-Link Fragment
+      - name: 3. Create Deep-Integration Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Master IOMMU & SMI Glue ---
-          CONFIG_IOMMU_SUPPORT=y
-          CONFIG_MTK_IOMMU=y
-          CONFIG_MTK_IOMMU_V2=y
-          CONFIG_MTK_IOMMU_MISC=y
-          CONFIG_MTK_M4U=y
-          CONFIG_MTK_M4U_V2=y
-          CONFIG_MTK_M4U_SUPPORT=y
-          CONFIG_MTK_SMI=y
-          CONFIG_MTK_SMI_BWP=y
-          
-          # --- The Master Clock & QoS ---
-          CONFIG_COMMON_CLK_MT6765=y
-          CONFIG_MTK_QOS_FRAMEWORK=y
-          CONFIG_MTK_CLKSRC_STABLE_IDLE=y
-          
-          # --- Root Architecture ---
+          # --- Master Platform Identity ---
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MTK_PLATFORM="mt6765"
           CONFIG_ARCH_MT6765=y
           CONFIG_MTK_PLATFORM_MT6765=y
+          CONFIG_COMMON_CLK_MT6765=y
           
-          # --- USB & HID Gadget ---
+          # --- SMI & M4U Hardware Bridge (The Ellis Fix) ---
+          CONFIG_MTK_SMI=y
+          CONFIG_MTK_SMI_COMMON=y
+          CONFIG_MTK_SMI_BWP=y
+          CONFIG_MTK_M4U_SUPPORT=y
+          CONFIG_MTK_M4U=y
+          CONFIG_MTK_M4U_V2=y
+          CONFIG_MTK_IOMMU=y
+          CONFIG_MTK_IOMMU_V2=y
+          CONFIG_MTK_IOMMU_MISC=y
+          
+          # --- Infrastructure & Power ---
+          CONFIG_MTK_GCE=y
+          CONFIG_MTK_CMDQ=y
+          CONFIG_MTK_QOS_FRAMEWORK=y
+          CONFIG_REGULATOR=y
+          CONFIG_MTK_PMIC_WRAP=y
+          
+          # --- USB HID Gadget Stack ---
           CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
@@ -57,31 +60,44 @@ jobs:
           CONFIG_GKI_HIDDEN_USB_CONFIGS=y
           EOF
 
-      - name: 4. Permissive Merge
+      - name: 4. Execute Permissive Merge
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
           mkdir -p out
+          # Merging without -r to allow our fragment to dominate the final .config
           bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             custom_hid.cfg
           
+          # Essential: Generate the .config and check for unmet dependencies immediately
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
       - name: 5. Verification
         run: |
-          echo "Verifying M4U and SMI presence..."
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U STILL LOST" && exit 1)
-          grep "CONFIG_MTK_SMI=y" out/.config || (echo "SMI STILL LOST" && exit 1)
-          echo "Hardware bridge confirmed."
+          echo "Verifying Hardware Bus and Memory Controller..."
+          grep "CONFIG_MTK_SMI_COMMON=y" out/.config || (echo "SMI_COMMON STRIPPED" && exit 1)
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U STRIPPED" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID STRIPPED" && exit 1)
+          echo "Hardware bridge confirmed. Proceeding to compile."
 
       - name: 6. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
+          # CC_FLAGS="-w" suppresses the redefinition warnings to keep logs clean
           make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
+
+      - name: 7. Package & Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ellis-Deep-V20
+          path: |
+            out/arch/arm64/boot/Image.gz
+            out/.config
