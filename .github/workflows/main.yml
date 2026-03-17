@@ -35,31 +35,28 @@ jobs:
 
       - name: 4. Execute Native Motorola Build
         run: |
-          # 1. PREPARE THE EXTRA CONFIG
-          # We define our unlocks in a standalone file as required by the MK protocol
+          # 1. CREATE THE EXTRA KEY
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           EOF
 
-          # 2. INITIALIZE WITH THE EXTRA COMMAND
-          # We use the 'vendor/ellis_defconfig' path with the EXTRA_CONFIG hook
+          # 2. THE NATIVE MASTER COMMAND
+          # We use 'defconfig' as the goal. 
+          # The Makefile then uses KBUILD_DEFCONFIG to find 'ellis'
+          # and KERNEL_EXTRA_CONFIG to find our 'hid' flags.
           make O=out ARCH=$ARCH \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
+            KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
             KERNEL_EXTRA_CONFIG=hid_unlock.config \
-            ext_config/ellis_defconfig.config
+            defconfig
 
-          # 3. COMPILE WITH NATIVE TOOLCHAIN LINKS
-          # We pass the full LLVM suite so the VDSO linker 'ld.lld' is found
+          # 3. COMPILE WITH AOSP LINKS
+          # Now that .config exists and is merged, we build it.
           make O=out -j$(nproc) \
             ARCH=$ARCH \
             CC=clang \
             LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
             CROSS_COMPILE=$CROSS_COMPILE \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KERNEL_EXTRA_CONFIG=hid_unlock.config
