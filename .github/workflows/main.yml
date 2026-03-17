@@ -1,11 +1,10 @@
-name: AOSP Native Motorola Protocol (Version-Locked)
+name: AOSP Native Motorola Protocol (MTK-Linked)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # THE MASTER IDENTITY KEYS
       MOTO_VER: "12.0.0"
       ARCH: arm64
       LLVM: 1
@@ -22,41 +21,46 @@ jobs:
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
-          
+
       - name: 3. Setup Native Toolchain (The Link)
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
           
-          # We must find the EXACT 'bin' folder containing ld.lld
+          # Link the entire LLVM bin directory to the PATH
           TOOLCHAIN_BIN=$(find $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86 -name "ld.lld" -exec dirname {} \;)
           echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
-          echo "Linker found at: $TOOLCHAIN_BIN"
 
       - name: 4. Execute Native Motorola Build
         run: |
-          # 1. CREATE THE EXTRA KEY
+          # A. CREATE THE EXTRA KEY (HID + MTK DEPS)
+          # These bridge the gap for 'mtk_btag_earaio' and enable HID
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_MTK_EARA_IO_SUPPORT=y
+          CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # 2. THE NATIVE MASTER COMMAND
-          # We use 'defconfig' as the goal. 
-          # The Makefile then uses KBUILD_DEFCONFIG to find 'ellis'
-          # and KERNEL_EXTRA_CONFIG to find our 'hid' flags.
+          # B. THE NATIVE MASTER COMMAND
+          # We use defconfig as the goal to merge both Ellis and Extra configs
           make O=out ARCH=$ARCH \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
             KERNEL_EXTRA_CONFIG=hid_unlock.config \
             defconfig
 
-          # 3. COMPILE WITH AOSP LINKS
-          # Now that .config exists and is merged, we build it.
+          # C. COMPILE WITH AOSP LINKS
+          # Passing full toolchain suite to satisfy VDSO and MTK drivers
           make O=out -j$(nproc) \
             ARCH=$ARCH \
             CC=clang \
             LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             CROSS_COMPILE=$CROSS_COMPILE \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KERNEL_EXTRA_CONFIG=hid_unlock.config
