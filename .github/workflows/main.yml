@@ -39,6 +39,39 @@ jobs:
           </manifest>
           EOF
 
+      - name: 5. Native Motorola Build
+        run: |
+          # 1. Define the internal AOSP Toolchain paths
+          # We find the specific clang version folder (it usually starts with 'clang-r')
+          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-*)
+          export PATH="$CLANG_DIR/bin:$PATH"
+          
+          # 2. Tell the Makefile to use LLVM/Clang instead of the missing GCC
+          # We point CROSS_COMPILE to the LLVM binutils prefix
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+          
+          # 3. Run the compile from the kernel directory
+          # We use the 'ellis_defconfig' first to ensure the verifier is happy
+          cd kernel/motorola/ellis
+          make O=out ellis_defconfig
+          
+          # 4. Inject your HID fragment now that the environment is "locked"
+          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
+          
+          # 5. Final Native Compile
+          make O=out -j$(nproc) \
+            ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu-
+
       - name: 4. Selective Sync
         run: |
           # Sync only the build tools and our injected kernel
@@ -47,20 +80,6 @@ jobs:
             prebuilts/clang/host/linux-x86 \
             kernel/motorola/ellis
 
-      - name: 5. Native Motorola Build
-        run: |
-          source build/envsetup.sh
-          
-          # Manually export variables that 'lunch' usually handles for Ellis
-          # This forces the "Engineering" pathing you need
-          export TARGET_PRODUCT=ellis
-          export TARGET_BUILD_VARIANT=eng
-          export OUT_DIR=out
-          
-          # Build using the AOSP native wrapper
-          # This ensures the verifier sees your HID and IOMMU changes
-          make -C kernel/motorola/ellis ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- \
-          REAL_CC=clang CLANG_TRIPLE=aarch64-linux-gnu- KERNEL_EXTRA_CONFIG=hid_custom
 
       - name: 6. Archive Kernel
         uses: actions/upload-artifact@v4
