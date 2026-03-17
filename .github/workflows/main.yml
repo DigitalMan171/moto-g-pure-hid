@@ -1,83 +1,58 @@
-name: AOSP Native Linked Build
+name: AOSP Native Motorola Protocol (Version-Locked)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # THE MECHANICAL LINKS
+      # THE MASTER IDENTITY KEYS
+      MOTO_VER: "12.0.0"
       ARCH: arm64
-      SUBARCH: arm64
-      CROSS_COMPILE: aarch64-linux-android-
-      CLANG_TRIPLE: aarch64-linux-gnu-
       LLVM: 1
       LLVM_IAS: 1
-    
+      CROSS_COMPILE: aarch64-linux-android-
+
     steps:
       - name: 1. Maximize Workspace
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
-      - name: 2. Clone Motorola Kernel Source
+      - name: 2. Clone Official Motorola Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 3. Pull AOSP Native Toolchain (The Oven)
+      - name: 3. Setup Native Toolchain (The Link)
         run: |
-          # This provides the 'clang' and 'binutils' that lunch expects
-          # We place it in the 'prebuilts' folder to satisfy the internal links
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
-
-      - name: 4. Finalize AOSP Links & Build
-        run: |
-          # 1. Setup the Toolchain Link
+          # Add the native clang to the environment path
           CLANG_PATH=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*)
-          export PATH="$CLANG_PATH/bin:$PATH"
-          
-          # 2. Native Motorola Build with Master Flags
-          # We use the 'defconfig' command which is the official AOSP entry point
-          # for merging extension configs.
-          make O=out ARCH=arm64 \
+          echo "$CLANG_PATH/bin" >> $GITHUB_PATH
+
+      - name: 4. Execute Native Motorola Build
+        run: |
+          # Initialize the "Ellis" Engineering environment
+          # We pass the version directly to unlock the driver paths
+          make O=out ARCH=$ARCH \
             KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
+            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             defconfig
 
-          # 3. Variable-Driven HID Injection
-          # Instead of manual edits, we use the 'merge_config' utility
-          # to append the variables to the active .config
-          mkdir -p arch/arm64/configs/vendor/ext_config/
-          cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
-          CONFIG_USB_G_HID=y
-          CONFIG_USB_CONFIGFS_F_HID=y
-          EOF
-          
+          # Variable-driven HID Injection (No manual edits)
           ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
 
-          # 4. Final Engineering Compile
-          # We pass LLVM=1 to ensure the modern AOSP toolchain links are used
+          # Final Engineering Compile
+          # This links the drivers using the Moto 12.0.0 identity
           make O=out -j$(nproc) \
-            ARCH=arm64 \
+            ARCH=$ARCH \
             CC=clang \
-            CROSS_COMPILE=aarch64-linux-android- \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            V=1
+            CROSS_COMPILE=$CROSS_COMPILE \
+            CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER
 
-          # 3. Execute Native Build
-          # We use the 'ellis_defconfig' which triggers the Motorola Verifier
-          # and pulls in the IOMMU/MTK headers.
-          make O=out ellis_defconfig
-          
-          # Merge the fragment into the verified config
-          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
-          
-          # Compile with the LLVM links active
-          make O=out -j$(nproc) CC=clang
-
-      - name: 5. Archive Verified Kernel
+      - name: 5. Archive Verified Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-linked-kernel
+          name: moto-g-pure-custom-kernel
           path: out/arch/arm64/boot/Image.gz*
