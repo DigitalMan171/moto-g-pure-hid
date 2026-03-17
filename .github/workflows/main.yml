@@ -1,11 +1,11 @@
-name: Motorola Ellis Factory Chain (Total Cache)
+name: Motorola Ellis Factory Official Topology
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain & Source Cache
+      - name: 1. Toolchain & Source Cache (The Save Method)
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -13,71 +13,70 @@ jobs:
             prebuilts/clang/host/linux-x86
             kernel
             build
-            vendor/motorola/modules
-          key: ${{ runner.os }}-moto-complete-v1-${{ hashFiles('**/Makefile', '**/Kconfig') }}
-          restore-keys: |
-            ${{ runner.os }}-moto-complete-v1-
+          key: ${{ runner.os }}-moto-ellis-factory-v6
 
-      - name: 2. Selective Clone (Only if Cache Miss)
+      - name: 2. Automated Factory Sync (Standard Hierarchy)
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # Only clone what isn't already there from the cache
-          if [ ! -d "kernel" ]; then
-            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-            https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          fi
+          # A. Core Kernel Source
+          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+          https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           
-          if [ ! -d "build" ]; then
-            git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
-          fi
+          # B. Official Build Tools (Must be named 'build' for internal scripts)
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
           
-          if [ ! -d "vendor/motorola/modules" ]; then
-            git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git vendor/motorola/modules
-          fi
+          # C. Official Android Clang Toolchain
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+          prebuilts/clang/host/linux-x86
           
-          if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
-            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            prebuilts/clang/host/linux-x86
-          fi
-
-      - name: 3. Bridge & Pathing (Required every run)
-        run: |
-          # Even with cache, we must re-link the virtual paths
+          # D. Supplemental Modules (Nested into the Vendor path Motorola expects)
           mkdir -p kernel/vendor/motorola
-          # Remove old link if it exists to prevent nested links
-          rm -f kernel/vendor/motorola/modules
-          ln -s $GITHUB_WORKSPACE/vendor/motorola/modules kernel/vendor/motorola/modules
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
+
+      - name: 3. Path Authorization & Sanitization
+        run: |
+          # Remove Windows line-endings from vendor driver configs
+          find kernel/vendor/motorola/modules -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
           
-          # Align VM Paths
-          MOTO_TOOLS_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
+          # Authorized Bin Paths (Factory Standard)
+          MOTO_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           
-          echo "$MOTO_TOOLS_BIN" >> $GITHUB_PATH
+          echo "$MOTO_BIN" >> $GITHUB_PATH
           echo "$CLANG_BIN" >> $GITHUB_PATH
-
-      - name: 4. Execute build.sh
-        run: |
-          chmod +x build/build.sh
           
+          # Grant execution to the orchestrator
+          chmod +x build/build.sh
+
+      - name: 4. Execution (Motorola Lunch Protocol)
+        run: |
+          # Environment variables required by build.sh to trigger the correct lunch combo
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
+          
+          # Feature Unlocks for Pointer Engineering
+          export MTK_TOUCH_PANEL=yes
+          export MTK_USB_DUAL_ROLE_SUPPORT=yes
+          
+          # Build Optimization & Output
           export OUT_DIR=$GITHUB_WORKSPACE/out
           export DIST_DIR=$GITHUB_WORKSPACE/dist
           export INSTALL_MOD_STRIP="--strip-unneeded"
           
+          # Direct invocation of the factory orchestrator
           ./build/build.sh -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             KBUILD_DEFCONFIG=ellis_defconfig
 
-      - name: 5. Archive
+      - name: 5. Archive Factory Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-factory-build
+          name: moto-g-pure-ellis-factory-v6
           path: |
             dist/Image.gz*
             dist/*.ko
