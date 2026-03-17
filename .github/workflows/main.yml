@@ -5,45 +5,49 @@ jobs:
   build-kernel:
     runs-on: ubuntu-latest
     env:
-      # 1. NATIVE MOTOROLA IDENTIFIERS
-      # 'ellis_factory' triggers the factory-mtk.config and iommu fast-path
-      TARGET_PRODUCT: ellis_factory
-      TARGET_BUILD_VARIANT: eng
+      # Motorola Internal Identifiers
       PROJECT: ellis
+      TARGET_BUILD_VARIANT: eng
       ARCH: arm64
-      
-      # 2. COMPILER FLAGS
-      # Motorola natively uses LLVM (Clang) for Android 12
+      # The native compiler flags the 'verifier' expects
       LLVM: 1
       LLVM_IAS: 1
-      CLANG_TRIPLE: aarch64-linux-gnu-
-      CROSS_COMPILE: aarch64-linux-android-
 
     steps:
-      - name: 1. Clone Motorola Source
+      - name: 1. Clone Source
         run: |
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Inject HID Fragment into Native Path
+      - name: 2. Inject HID Fragment
         run: |
-          # We place our data in the 'ext_config' folder so the Motorola verifier picks it up
+          # Create the fragment in the vendor extension path
+          # This ensures the 'merge' step includes our data natively
           mkdir -p arch/arm64/configs/vendor/ext_config/
           cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           EOF
-          # Tell the script to include this new fragment during the merge step
-          echo "KERNEL_EXTRA_CONFIG=hid_custom" >> $GITHUB_ENV
 
-      - name: 3. Run Native Build Script
+      - name: 3. Run Native Verifier & Compile
         run: |
-          # This script handles the 'add_moto_defconfig_fragments' logic natively.
-          # It merges the base ellis_defconfig with factory-ellis.config AND our hid_custom.config.
-          ./build/build.sh -j$(nproc)
+          # Motorola's kernel-mtk usually uses 'make' with specific vendor targets
+          # to trigger the 'add_moto_defconfig_fragments' logic.
+          
+          # First: Generate the base config with vendor fragments
+          # This is the step that resolves the IOMMU 'FAST' paths
+          make ellis_defconfig
+          
+          # Second: Merge our custom HID fragment using the kernel's own tool
+          # This keeps the build 'verified' and 'native'
+          ./scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/vendor/ext_config/hid_custom.config
+          
+          # Third: Finalize the config and compile
+          make olddefconfig
+          make -j$(nproc)
 
-      - name: 4. Archive Verified Kernel Image
+      - name: 4. Archive Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-hid-kernel
-          path: out/arch/arm64/boot/Image.gz*
+          name: ellis-kernel
+          path: arch/arm64/boot/Image.gz*
