@@ -1,95 +1,69 @@
-name: Motorola Ellis Factory Official Topology
+name: Motorola Ellis Fresh Factory Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Toolchain & Source Cache
-        id: cache-all
-        uses: actions/cache@v4
-        with:
-          path: |
-            prebuilts/clang/host/linux-x86
-            kernel
-            build
-          key: ${{ runner.os }}-moto-ellis-factory-v8
-
-      - name: 2. Automated Factory Sync & Purge
+      - name: 1. Fresh Environment Sync (No Cache)
         run: |
-          # A. CLEANUP: If the cache gave us a messy 'build' folder, wipe it
-          # We check if build/build.sh exists; if not, the folder is junk.
-          if [ -d "build" ] && [ ! -f "build/build.sh" ]; then
-            echo "Old cache structure detected. Purging..."
-            rm -rf build
-          fi
-
-          # B. Core Kernel Source (Sync if missing)
-          if [ ! -d "kernel" ]; then
-            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
-            https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          fi
+          # A. Official Android Clang Toolchain
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+          prebuilts/clang/host/linux-x86
           
-          # C. Official Build Tools (Direct Path Alignment)
-          if [ ! -d "build" ]; then
-            git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git temp_tools
-            mkdir -p build
-            # Move the inner build content to the root build/ folder
-            cp -r temp_tools/* build/
-            rm -rf temp_tools
-          fi
+          # B. Core Kernel Source
+          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+          https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           
-          # D. Official Android Clang Toolchain
-          if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
-            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            prebuilts/clang/host/linux-x86
-          fi
+          # C. Official Build Tools (Cloned directly into 'build')
+          # This avoids the 'build/build/build.sh' nested folder error
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
           
-          # E. Supplemental Modules (Nesting)
-          # We always re-clone or update this to ensure your latest HID code is present
-          rm -rf kernel/vendor/motorola/modules
+          # D. Vendor Modules (Nesting into the expected factory path)
           mkdir -p kernel/vendor/motorola
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
 
-      - name: 3. Path Authorization & Permissions
+      - name: 2. Toolchain Authorization
         run: |
-          # Strip Windows characters from the newly synced modules
-          find kernel/vendor/motorola/modules -name "Kconfig*" -o -name "Makefile*" | xargs sed -i 's/\r//g'
-          
-          # Standard Motorola/Android Paths
-          MOTO_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
+          # Identify the exact Clang version folder
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           
-          echo "$MOTO_BIN" >> $GITHUB_PATH
+          # Add Motorola's internal tools and Clang to the system PATH
+          echo "$GITHUB_WORKSPACE/build/linux-x86/bin" >> $GITHUB_PATH
           echo "$CLANG_BIN" >> $GITHUB_PATH
           
-          chmod +x "$GITHUB_WORKSPACE/build/build.sh"
+          # Grant execution permission to the factory orchestrator
+          chmod +x build/build.sh
 
-      - name: 4. Execution (Standard Lunch Protocol)
+      - name: 3. Execution (Motorola Lunch Protocol)
         run: |
+          # Required variables for the 'ellis' (Moto G Pure) project config
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
+          
+          # Hardware Feature Toggles
           export MTK_TOUCH_PANEL=yes
           export MTK_USB_DUAL_ROLE_SUPPORT=yes
           
+          # Output and Optimization
           export OUT_DIR=$GITHUB_WORKSPACE/out
           export DIST_DIR=$GITHUB_WORKSPACE/dist
           export INSTALL_MOD_STRIP="--strip-unneeded"
           
-          # Launch from root
+          # Run the build from the root workspace
           ./build/build.sh -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             KBUILD_DEFCONFIG=ellis_defconfig
 
-      - name: 5. Archive
+      - name: 4. Archive Verified Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-factory-v8
+          name: moto-g-pure-ellis-fresh-build
           path: |
             dist/Image.gz*
             dist/*.ko
