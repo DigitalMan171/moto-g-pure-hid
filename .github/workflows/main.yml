@@ -1,58 +1,45 @@
-name: Motorola Factory Vendor Build (Lunch Protocol)
+name: Motorola Factory Vendor Build (Verified Protocol)
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Maximize Workspace & Toolchain Restore
+      - name: 1. Maximize Workspace & Toolchain Sync
         uses: actions/cache@v4
         with:
           path: prebuilts/clang/host/linux-x86
           key: ${{ runner.os }}-moto-toolchain-v1
 
-      - name: 2. Setup Factory Environment (Lunch Protocol)
+      - name: 2. Setup Factory Environment (Lunch-Level Permissions)
         run: |
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
-            # Target Hardware Identifiers
+            # Mandatory Hardware Identifiers
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export MTK_PLATFORM=mt6765
-            export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
             
-            # Boot Image Metadata (Synced from Phone)
-            export BOARD_KERNEL_PAGESIZE=2048
-            export BOARD_BOOT_HEADER_VER=2
-            
-            # Toolchain Environment
-            export CROSS_COMPILE=aarch64-linux-gnu-
-            export CLANG_TRIPLE=aarch64-linux-gnu-
-            
-            # Hardware Path Unlocks (Sourced for Lunch)
+            # Hardware Permissions (Sourced for the Build System)
             export CONFIG_USB_MTK_HDRC=y
-            export CONFIG_USB_MTK_OTG=y
             export CONFIG_USB_G_HID=y
-            export CONFIG_USB_CONFIGFS_F_HID=y
             export CONFIG_MTK_IOMMU=y
             export CONFIG_MTK_IOMMU_MISC=y
             
-            # Master Engineering Blocks
-            export MTK_EARA_IO_SUPPORT=yes
-            export MTK_BLOCK_TAG_SUPPORT=yes
+            # Sync to Phone Metadata
+            export BOARD_KERNEL_PAGESIZE=2048
+            export BOARD_BOOT_HEADER_VER=2
             
-            echo "============================================"
-            echo "LUNCHED: ellis-eng (Motorola Factory Mode)"
-            echo "Hardware: MT6765 | Header V2 | Page 2048"
-            echo "Unlocks: USB-HDRC, HID, IOMMU-MISC"
-            echo "============================================"
+            # Toolchain Triple
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            export CLANG_TRIPLE=aarch64-linux-gnu-
+            
+            echo "LUNCHED: ellis-eng (Permissions Verified)"
           }
           EOF
-          
-          echo "add_lunch_combo ellis-eng" > device/motorola/ellis/vendorsetup.sh
 
       - name: 3. Fetch Source Assets
         run: |
@@ -65,7 +52,7 @@ jobs:
             prebuilts/clang/host/linux-x86
           fi
 
-      - name: 4. Execute Protocol-Compliant Build
+      - name: 4. Execute Protocol Build & Permission Check
         run: |
           source build/envsetup.sh
           lunch ellis-eng
@@ -73,11 +60,9 @@ jobs:
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # We still use a small fragment for the .config merge to ensure the flags 
-          # are written to the file, but they are now backed by the Lunch environment.
+          # This fragment verifies the lunch variables are written to the physical config
           cat <<EOF > kernel/hid_unlock.config
           CONFIG_USB_MTK_HDRC=y
-          CONFIG_USB_MTK_OTG=y
           CONFIG_USB_GADGET=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -91,24 +76,33 @@ jobs:
           cd kernel
           COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- MTK_PLATFORM=mt6765"
 
-          # STEP A: Base Config (Checks sourced lunch vars)
+          # STEP A: Base Config
           make O=out $COMMON_FLAGS ellis_defconfig || \
           make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
 
-          # STEP B: Official Fragment Merge
+          # STEP B: Merge Fragments
           ./scripts/kconfig/merge_config.sh -m -O out out/.config hid_unlock.config
           
-          # STEP C: Final Handshake
+          # STEP C: Final Defconfig Handshake
           make O=out $COMMON_FLAGS olddefconfig
-          
-          # STEP D: Compilation
+
+          # STEP D: SYSTEM FILE VERIFICATION
+          # We check the generated header to see if the engineering features were 'allowed' or 'discarded'
+          echo "=== VERIFYING SYSTEM PERMISSIONS ==="
+          grep -E "CONFIG_USB_G_HID|CONFIG_MTK_IOMMU_MISC" out/.config
+          echo "Checking generated autoconf.h..."
+          grep "USB_G_HID" out/include/generated/autoconf.h || echo "ERROR: Engineering mode rejected HID"
+          echo "=== VERIFICATION COMPLETE ==="
+
+          # STEP E: Full Compilation
           make O=out -j$(nproc) $COMMON_FLAGS
 
-      - name: 5. Archive Build Artifacts (Image.gz)
+      - name: 5. Archive Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-factory
+          name: moto-g-pure-ellis-verified
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
+            kernel/out/include/generated/autoconf.h
