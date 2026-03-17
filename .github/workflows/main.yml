@@ -1,4 +1,4 @@
-name: Ellis Full Dependency V24
+name: Ellis Full Unlock V25
 on: [workflow_dispatch]
 
 jobs:
@@ -18,20 +18,23 @@ jobs:
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           key: toolchain-ellis-v35-${{ runner.os }}
 
-      - name: 3. Create Full-Dependency Fragment
+      - name: 3. Create Custom Fragment (Motorola Unlocked)
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- Master Solution Gate ---
-          CONFIG_MEDIATEK_SOLUTION=y
+          # --- Motorola Master Unlocks ---
+          # CONFIG_MOTOROLA_GKI_STRIP is not set
+          CONFIG_MOTOROLA_LOCKED_GKI=n
           CONFIG_MTK_ENG_BUILD=y
+          CONFIG_MTK_COMBO=y
+          CONFIG_MTK_LEGACY_HAL=y
           
-          # --- Platform Architecture ---
-          CONFIG_ARCH_MEDIATEK=y
+          # --- Enable Vendor Solution ---
+          CONFIG_MEDIATEK_SOLUTION=y
           CONFIG_MTK_PLATFORM="mt6765"
           CONFIG_ARCH_MT6765=y
           CONFIG_MTK_PLATFORM_MT6765=y
           
-          # --- SMI & M4U Hardware Logic ---
+          # --- Hardware Bus & Memory (SMI/M4U) ---
           CONFIG_MTK_SMI=y
           CONFIG_MTK_SMI_COMMON=y
           CONFIG_MTK_SMI_BWP=y
@@ -40,15 +43,8 @@ jobs:
           CONFIG_MTK_M4U_V2=y
           CONFIG_MTK_IOMMU=y
           CONFIG_MTK_IOMMU_V2=y
-          CONFIG_MTK_IOMMU_MISC=y
           
-          # --- Core Infrastructure ---
-          CONFIG_MTK_GCE=y
-          CONFIG_MTK_CMDQ=y
-          CONFIG_MTK_QOS_FRAMEWORK=y
-          CONFIG_COMMON_CLK_MT6765=y
-          
-          # --- USB HID Stack ---
+          # --- USB HID Gadget Stack ---
           CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
@@ -57,10 +53,10 @@ jobs:
           CONFIG_USB_HID=y
           CONFIG_HID_GENERIC=y
           
-          # --- GKI Lockdown Bypasses ---
+          # --- Infrastructure ---
+          CONFIG_COMMON_CLK_MT6765=y
+          CONFIG_MTK_QOS_FRAMEWORK=y
           CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
-          CONFIG_GKI_HIDDEN_USB_CONFIGS=y
-          CONFIG_DEBUG_MTK_M4U=y
           EOF
 
       - name: 4. The Clean Merge
@@ -71,41 +67,36 @@ jobs:
           
           mkdir -p out
           
-          # Execute permissive merge
+          # Using merge_config to combine GKI base with Motorola and Custom fragments
           bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             custom_hid.cfg
           
-          # Let the Kconfig system solve dependencies based on our selections
+          # Apply the configuration
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
       - name: 5. Verification
         run: |
-          echo "Verifying MediaTek Solution and SMI survival..."
-          # Check if the master switch worked
-          grep "CONFIG_MEDIATEK_SOLUTION=y" out/.config || (echo "MASTER SWITCH FAILED" && exit 1)
-          # Check if SMI_COMMON was finally unlocked
+          echo "Verifying Motorola Unlock Survival..."
+          grep "CONFIG_MEDIATEK_SOLUTION=y" out/.config || (echo "VENDOR SOLUTION STRIPPED - CHECK GKI LOCKS" && exit 1)
           grep "CONFIG_MTK_SMI_COMMON=y" out/.config || (echo "SMI_COMMON STRIPPED" && exit 1)
-          # Check the HID driver
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID STRIPPED" && exit 1)
-          echo "All dependencies satisfied."
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID DRIVER STRIPPED" && exit 1)
+          echo "Unlock Successful: Vendor Solution is active."
 
       - name: 6. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          
-          # Build target Image.gz
           make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
 
       - name: 7. Package & Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Full-Dependency-V24
+          name: Ellis-Full-Unlock-V25
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
