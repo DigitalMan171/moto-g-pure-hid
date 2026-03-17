@@ -1,4 +1,4 @@
-name: Ellis Full Heartbeat V17
+name: Ellis IOMMU Force-Link V18
 on: [workflow_dispatch]
 
 jobs:
@@ -16,38 +16,41 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86/clang-r416183b
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis-v33-${{ runner.os }}
+          key: toolchain-ellis-v34-${{ runner.os }}
 
-      - name: 3. Create Heartbeat Fragment
+      - name: 3. Create Force-Link Fragment
         run: |
           cat <<EOF > custom_hid.cfg
-          # --- The Master Clock (The Fix) ---
-          CONFIG_COMMON_CLK_MT6765=y
-          CONFIG_MTK_CLKSRC_STABLE_IDLE=y
+          # --- Master IOMMU & SMI Glue ---
+          CONFIG_IOMMU_SUPPORT=y
+          CONFIG_MTK_IOMMU=y
+          CONFIG_MTK_IOMMU_V2=y
+          CONFIG_MTK_IOMMU_MISC=y
+          CONFIG_MTK_M4U=y
+          CONFIG_MTK_M4U_V2=y
+          CONFIG_MTK_M4U_SUPPORT=y
+          CONFIG_MTK_SMI=y
+          CONFIG_MTK_SMI_BWP=y
           
-          # --- Resolve QoS Type Mismatch ---
+          # --- The Master Clock & QoS ---
+          CONFIG_COMMON_CLK_MT6765=y
           CONFIG_MTK_QOS_FRAMEWORK=y
-          CONFIG_MTK_PLATFORM_MT6765=y
+          CONFIG_MTK_CLKSRC_STABLE_IDLE=y
           
           # --- Root Architecture ---
           CONFIG_ARCH_MEDIATEK=y
           CONFIG_MTK_PLATFORM="mt6765"
           CONFIG_ARCH_MT6765=y
+          CONFIG_MTK_PLATFORM_MT6765=y
           
-          # --- M4U / IOMMU Logic ---
-          CONFIG_MTK_M4U_SUPPORT=y
-          CONFIG_MTK_M4U=y
-          CONFIG_MTK_IOMMU=y
-          CONFIG_MTK_IOMMU_V2=y
-          CONFIG_MTK_SMI=y
-          
-          # --- USB & HID ---
+          # --- USB & HID Gadget ---
           CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_LIBCOMPOSITE=y
           CONFIG_USB_CONFIGFS=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_HID=y
+          CONFIG_HID_GENERIC=y
           
           # --- GKI Visibility ---
           CONFIG_GKI_HIDDEN_IOMMU_CONFIGS=y
@@ -61,7 +64,6 @@ jobs:
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
           
           mkdir -p out
-          # No -r: Allow our fragment to fix the GKI type-mismatch
           bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
@@ -72,10 +74,10 @@ jobs:
 
       - name: 5. Verification
         run: |
-          echo "Checking if Clock and M4U survived the merge..."
-          grep "CONFIG_COMMON_CLK_MT6765=y" out/.config || (echo "CLOCK LOST" && exit 1)
-          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U LOST" && exit 1)
-          echo "Heartbeat confirmed."
+          echo "Verifying M4U and SMI presence..."
+          grep "CONFIG_MTK_M4U=y" out/.config || (echo "M4U STILL LOST" && exit 1)
+          grep "CONFIG_MTK_SMI=y" out/.config || (echo "SMI STILL LOST" && exit 1)
+          echo "Hardware bridge confirmed."
 
       - name: 6. Compile
         run: |
