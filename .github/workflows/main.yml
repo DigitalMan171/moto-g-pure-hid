@@ -16,22 +16,33 @@ jobs:
           mkdir -p build device/motorola/ellis
           cat <<EOF > build/envsetup.sh
           function lunch() {
+            # Target Identifiers
             export ARCH=arm64
             export PROJECT=ellis
             export MTK_PROJECT=ellis
             export TARGET_PRODUCT=ellis
             export TARGET_BUILD_VARIANT=eng
-            # Point to Clang specifically to stop the GCC search
+            
+            # Hardware Parameters (Synced from Magiskboot Unpack)
+            export BOARD_KERNEL_PAGESIZE=2048
+            export BOARD_BOOT_HEADER_VER=2
+            export BOARD_MKBOOTIMG_ARGS="--header_version 2"
+            
+            # Toolchain Triple (Clang-Native)
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             export CLANG_TRIPLE=aarch64-linux-gnu-
-            export CROSS_COMPILE=aarch64-linux-android-
+            
+            # Master Engineering Flags
             export MTK_EARA_IO_SUPPORT=yes
             export MTK_BLOCK_TAG_SUPPORT=yes
+            
             echo "============================================"
             echo "LUNCHED: ellis-eng (Motorola Factory Mode)"
+            echo "Hardware Sync: Header V2 | Page 2048"
             echo "============================================"
           }
           EOF
-          echo "add_lunch_combo ellis-eng" > device/motorola/ellis/vendorsetup.sh
 
       - name: 3. Fetch Source Assets
         run: |
@@ -49,13 +60,11 @@ jobs:
           source build/envsetup.sh
           lunch ellis-eng
           
-          # Find the exact Clang path
+          # Map Toolchain
           CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r* | sort -V | tail -n 1)
-          
-          # Update PATH to include the bin folder
           export PATH="$CLANG_DIR/bin:$PATH"
           
-          # Carry-over HID fragment
+          # Prep carry-over fragment
           cat <<EOF > kernel/hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -65,29 +74,27 @@ jobs:
 
           cd kernel
           
-          # THE FIX: Tell Make to use Clang's LLVM tools for EVERYTHING
-          # This prevents the 'gcc: not found' errors in Kconfig
-          COMMON_FLAGS="ARCH=$ARCH PROJECT=$PROJECT CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+          # Define Common Build Arguments for Clang/LLVM
+          COMMON_FLAGS="ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
 
-          # Generate defconfig
-          make O=out $COMMON_FLAGS ellis_defconfig
-          
-          # Merge settings
+          # STEP A: Try both standard and extended defconfig paths
+          make O=out $COMMON_FLAGS ellis_defconfig || \
+          make O=out $COMMON_FLAGS KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config defconfig
+
+          # STEP B: Official Fragment Merge
           ./scripts/kconfig/merge_config.sh -m -O out out/.config hid_unlock.config
           
-          # Finalize
+          # STEP C: Finalize Configuration
           make O=out $COMMON_FLAGS olddefconfig
           
-          # Compile
-          make O=out -j$(nproc) $COMMON_FLAGS \
-          MTK_EARA_IO_SUPPORT=$MTK_EARA_IO_SUPPORT \
-          MTK_BLOCK_TAG_SUPPORT=$MTK_BLOCK_TAG_SUPPORT
+          # STEP D: Full Factory Compilation
+          make O=out -j$(nproc) $COMMON_FLAGS
 
-      - name: 5. Archive Build Artifacts
+      - name: 5. Archive Build Artifacts (Image.gz)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-kernel
+          name: moto-g-pure-ellis-custom
           path: |
             kernel/out/arch/arm64/boot/Image.gz*
             kernel/out/.config
