@@ -1,75 +1,49 @@
-name: Motorola Protocol Ellis Build
+name: Motorola Ellis Native Protocol Build
 on: [workflow_dispatch]
 
 jobs:
-  build:
+  build-kernel:
     runs-on: ubuntu-latest
     env:
-      # Motorola Internal Protocol Variables
-      PROJECT: ellis
+      # 1. NATIVE MOTOROLA IDENTIFIERS
+      # 'ellis_factory' triggers the factory-mtk.config and iommu fast-path
+      TARGET_PRODUCT: ellis_factory
       TARGET_BUILD_VARIANT: eng
+      PROJECT: ellis
       ARCH: arm64
-      # The name of your custom fragment file (without .config)
-      KERNEL_EXTRA_CONFIG: mtk_hid_extension
-      KBUILD_OUTPUT: out
+      
+      # 2. COMPILER FLAGS
+      # Motorola natively uses LLVM (Clang) for Android 12
+      LLVM: 1
+      LLVM_IAS: 1
+      CLANG_TRIPLE: aarch64-linux-gnu-
+      CROSS_COMPILE: aarch64-linux-android-
 
     steps:
-      - name: 1. Clone Source
+      - name: 1. Clone Motorola Source
         run: |
-          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
+          https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 2. Toolchain Setup
-        uses: actions/cache@v4
-        with:
-          path: |
-            prebuilts/clang/host/linux-x86/clang-r416183b
-            prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          key: toolchain-ellis
-
-      - name: 3. Create Official Extension Fragment
+      - name: 2. Inject HID Fragment into Native Path
         run: |
-          # Protocol requires fragments to be in arch/arm64/configs/ext_config/
-          mkdir -p arch/arm64/configs/ext_config
-          echo "CONFIG_USB_G_ANDROID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
-          echo "CONFIG_USB_F_HID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
-          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
-          echo "CONFIG_USB_MTK_OTG=y" >> arch/arm64/configs/ext_config/${{ env.KERNEL_EXTRA_CONFIG }}.config
+          # We place our data in the 'ext_config' folder so the Motorola verifier picks it up
+          mkdir -p arch/arm64/configs/vendor/ext_config/
+          cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
+          CONFIG_USB_G_HID=y
+          CONFIG_USB_CONFIGFS_F_HID=y
+          EOF
+          # Tell the script to include this new fragment during the merge step
+          echo "KERNEL_EXTRA_CONFIG=hid_custom" >> $GITHUB_ENV
 
-      - name: 4. Execute Motorola Defconfig Protocol
+      - name: 3. Run Native Build Script
         run: |
-          # Set toolchain path for the Kconfig scripts
-          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
-          
-          # This command triggers 'defconfig.mk' to merge fragments into 'out/.config'
-          # We do NOT target arch/arm64/configs/mapphone_defconfig directly
-          make O=$KBUILD_OUTPUT ARCH=$ARCH PROJECT=$PROJECT \
-               TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT \
-               KERNEL_EXTRA_CONFIG=$KERNEL_EXTRA_CONFIG \
-               mapphone_defconfig
+          # This script handles the 'add_moto_defconfig_fragments' logic natively.
+          # It merges the base ellis_defconfig with factory-ellis.config AND our hid_custom.config.
+          ./build/build.sh -j$(nproc)
 
-      - name: 5. Protocol Dependency Resolution
-        run: |
-          # This is the 'Motorola way' to let the kernel resolve 
-          # missing dependencies (like USB_GADGET) based on our new flags.
-          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$PATH
-          make O=$KBUILD_OUTPUT ARCH=$ARCH olddefconfig
-
-      - name: 6. Build Unlocked Image
-        run: |
-          export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          
-          # Final build using Clang as the primary compiler
-          make O=$KBUILD_OUTPUT ARCH=$ARCH PROJECT=$PROJECT \
-               CC=clang LLVM=1 LLVM_IAS=1 \
-               CROSS_COMPILE=aarch64-linux-android- \
-               CLANG_TRIPLE=aarch64-linux-gnu- \
-               -j$(nproc) Image.gz
-
-      - name: 7. Package Engineering Artifacts
-        if: always()
+      - name: 4. Archive Verified Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Unlocked-HID
-          path: |
-            out/arch/arm64/boot/Image.gz
-            out/.config
+          name: ellis-hid-kernel
+          path: out/arch/arm64/boot/Image.gz*
