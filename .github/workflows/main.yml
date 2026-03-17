@@ -1,49 +1,64 @@
-name: Motorola Native Source Build
+name: AOSP Native Linked Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # THE MECHANICAL LINKS
+      ARCH: arm64
+      SUBARCH: arm64
+      CROSS_COMPILE: aarch64-linux-android-
+      CLANG_TRIPLE: aarch64-linux-gnu-
+      LLVM: 1
+      LLVM_IAS: 1
+    
     steps:
       - name: 1. Maximize Workspace
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
-      - name: 2. Clone Motorola Source (Direct Branch)
+      - name: 2. Clone Motorola Kernel Source
         run: |
-          # Pulling the exact source you provided
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
 
-      - name: 3. Setup Native Build Environment
+      - name: 3. Pull AOSP Native Toolchain (The Oven)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex g++-multilib \
-          gcc-multilib git gnupg gperf libncurses5-dev libssl-dev \
-          libxml2-utils lzop rsync schedtool squashfs-tools xsltproc zip
+          # This provides the 'clang' and 'binutils' that lunch expects
+          # We place it in the 'prebuilts' folder to satisfy the internal links
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+          prebuilts/clang/host/linux-x86
 
-      - name: 4. Execute Motorola Native Wrapper
-        env:
-          # These are the "Magic" variables the Motorola build system listens for
-          # to prevent 'rejection' of the build environment.
-          PROJECT: ellis
-          VARIANT: eng
-          ARCH: arm64
-          LLVM: 1
-          # If the script requires a path to the prebuilts, we set it here
-          # but usually, the script looks for them in the root.
+      - name: 4. Finalize AOSP Links & Build
         run: |
-          # In this specific Motorola tree, the build entry point is 
-          # usually scripts/build_kernel.sh or build/build.sh
+          # 1. Manually set the PATH to our new prebuilts
+          # This mimics what 'lunch' does to the environment
+          CLANG_PATH=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*)
+          export PATH="$CLANG_PATH/bin:$PATH"
           
-          # We call the script that handles the 'add_moto_defconfig_fragments'
-          # and the toolchain verification automatically.
-          chmod +x scripts/build_kernel.sh
-          ./scripts/build_kernel.sh ellis
+          # 2. Inject HID Requirement into the Vendor Config
+          # We do this before the verifier runs
+          mkdir -p arch/arm64/configs/vendor/ext_config/
+          cat <<EOF > arch/arm64/configs/vendor/ext_config/hid_custom.config
+          CONFIG_USB_G_HID=y
+          CONFIG_USB_CONFIGFS_F_HID=y
+          EOF
+
+          # 3. Execute Native Build
+          # We use the 'ellis_defconfig' which triggers the Motorola Verifier
+          # and pulls in the IOMMU/MTK headers.
+          make O=out ellis_defconfig
           
-      - name: 5. Archive Native Output
+          # Merge the fragment into the verified config
+          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/ext_config/hid_custom.config
+          
+          # Compile with the LLVM links active
+          make O=out -j$(nproc) CC=clang
+
+      - name: 5. Archive Verified Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: moto-ellis-kernel
-          path: out/target/product/ellis/obj/KERNEL_OBJ/arch/arm64/boot/Image.gz*
+          name: ellis-linked-kernel
+          path: out/arch/arm64/boot/Image.gz*
