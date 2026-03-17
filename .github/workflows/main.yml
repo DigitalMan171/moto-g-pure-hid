@@ -33,8 +33,7 @@ jobs:
 
       - name: 4. Execute Native Motorola Build
         run: |
-          # A. CREATE THE EXTRA KEY (HID + MTK DEPS)
-          # These bridge the gap for 'mtk_btag_earaio' and enable HID
+          # 1. THE EXTRA CONFIG (Keep these as the base)
           cat <<EOF > hid_unlock.config
           CONFIG_USB_G_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
@@ -42,29 +41,29 @@ jobs:
           CONFIG_MTK_BLOCK_TAG_SUPPORT=y
           EOF
 
-          # B. THE NATIVE MASTER COMMAND
-          # We use defconfig as the goal to merge both Ellis and Extra configs
+          # 2. THE MASTER PLATFORM COMMAND
+          # We add MTK_PROJECT and MTK_PLATFORM to unlock the header paths
+          # for the MT6765 (the G Pure's heart)
           make O=out ARCH=$ARCH \
+            PROJECT=ellis \
+            MTK_PROJECT=ellis \
+            MTK_PLATFORM=mt6765 \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KBUILD_DEFCONFIG=ext_config/ellis_defconfig.config \
             KERNEL_EXTRA_CONFIG=hid_unlock.config \
             defconfig
 
-          # C. COMPILE WITH AOSP LINKS
-          # Passing full toolchain suite to satisfy VDSO and MTK drivers
+          # 3. COMPILE WITH PLATFORM LOCK
           make O=out -j$(nproc) \
             ARCH=$ARCH \
             CC=clang \
             LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
             CROSS_COMPILE=$CROSS_COMPILE \
+            PROJECT=ellis \
+            MTK_PROJECT=ellis \
+            MTK_PLATFORM=mt6765 \
             CONFIG_MOTOROLA_KERNEL_VERSION=$MOTO_VER \
             KERNEL_EXTRA_CONFIG=hid_unlock.config
-
       - name: 5. Archive Verified Artifacts
         uses: actions/upload-artifact@v4
         with:
