@@ -1,4 +1,4 @@
-name: Ellis Logic-First V27
+name: Ellis Infrastructure-First V28
 on: [workflow_dispatch]
 
 jobs:
@@ -18,32 +18,36 @@ jobs:
             prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           key: toolchain-ellis-v35-${{ runner.os }}
 
-      - name: 3. Create Final Override Fragment
+      - name: 3. Create Infrastructure Fragment
         run: |
           cat <<EOF > final_override.cfg
-          # --- Final Word Unlocks ---
+          # --- Platform Identity & Architecture ---
           CONFIG_ARCH_MEDIATEK=y
+          CONFIG_MTK_PLATFORM="mt6765"
+          CONFIG_ARCH_MT6765=y
+          CONFIG_MTK_PLATFORM_MT6765=y
+          
+          # --- The "Glue" Infrastructure (Missing Chain Links) ---
+          CONFIG_MTK_PMIC_WRAP=y
+          CONFIG_MTK_SCP=y
+          CONFIG_MTK_SMI=y
+          CONFIG_MTK_SMI_COMMON=y
+          
+          # --- Motorola Developer Unlocks ---
           CONFIG_MEDIATEK_SOLUTION=y
           CONFIG_MTK_ENG_BUILD=y
           CONFIG_MOTOROLA_LOCKED_GKI=n
           
-          # --- Platform & Bus Link ---
-          CONFIG_MTK_PLATFORM="mt6765"
-          CONFIG_MTK_PLATFORM_MT6765=y
-          CONFIG_MTK_SMI=y
-          CONFIG_MTK_SMI_COMMON=y
-          CONFIG_MTK_M4U=y
-          CONFIG_MTK_IOMMU_V2=y
-          
-          # --- USB HID Gadget ---
+          # --- HID & USB ---
           CONFIG_MTK_USB_GADGET=y
           CONFIG_USB_F_HID=y
           CONFIG_USB_CONFIGFS_F_HID=y
           CONFIG_USB_HID=y
           CONFIG_HID_GENERIC=y
           
-          # --- Essential Clocks ---
+          # --- Mandatory Power/Clock ---
           CONFIG_COMMON_CLK_MT6765=y
+          CONFIG_MTK_PMIC_WRAP_MT6765=y
           EOF
 
       - name: 4. The Correct Merge Order
@@ -54,39 +58,37 @@ jobs:
           
           mkdir -p out
           
-          # CRITICAL: final_override.cfg MUST BE LAST
+          # GKI base -> Moto Platform -> Ellis Specific -> Our Overrides
           bash scripts/kconfig/merge_config.sh -m -O out \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/ext_config/moto-mt6765.config \
             arch/arm64/configs/ext_config/ellis_defconfig.config \
             final_override.cfg
           
-          # Settle dependencies
+          # Settle dependencies - strictly identifying the project
           make O=$KBUILD_OUTPUT ARCH=arm64 PROJECT=ellis olddefconfig
 
       - name: 5. Verification
         run: |
-          echo "Verifying Final Survival..."
-          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || (echo "ARCH_MEDIATEK LOST" && exit 1)
-          grep "CONFIG_MEDIATEK_SOLUTION=y" out/.config || (echo "VENDOR SOLUTION LOST" && exit 1)
-          grep "CONFIG_MTK_SMI_COMMON=y" out/.config || (echo "SMI_COMMON LOST" && exit 1)
-          grep "CONFIG_USB_F_HID=y" out/.config || (echo "USB HID LOST" && exit 1)
-          echo "All systems green."
+          echo "Verifying Hardware Chain Survival..."
+          grep "CONFIG_ARCH_MEDIATEK=y" out/.config || (echo "ARCH LOST" && exit 1)
+          grep "CONFIG_MTK_PMIC_WRAP=y" out/.config || (echo "PMIC_WRAP LOST (Bridge Break)" && exit 1)
+          grep "CONFIG_MEDIATEK_SOLUTION=y" out/.config || (echo "VENDOR SOLUTION STILL STRIPPED" && exit 1)
+          grep "CONFIG_USB_F_HID=y" out/.config || (echo "HID LOST" && exit 1)
+          echo "Chain intact."
 
       - name: 6. Compile
         run: |
           export ARCH=arm64
           export KBUILD_OUTPUT=out
           export PATH=$GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r416183b/bin:$GITHUB_WORKSPACE/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH
-          
-          # Compile
           make O=$KBUILD_OUTPUT PROJECT=ellis TARGET_BOARD_PLATFORM=mt6765 CC=clang LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-w" -j$(nproc) Image.gz
 
       - name: 7. Package & Upload
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Final-V27
+          name: Ellis-Infrastructure-V28
           path: |
             out/arch/arm64/boot/Image.gz
             out/.config
