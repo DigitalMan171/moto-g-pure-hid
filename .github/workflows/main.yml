@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Build v79
+name: Motorola Ellis Factory Build v81
 on: [workflow_dispatch]
 
 jobs:
@@ -13,89 +13,89 @@ jobs:
             prebuilts
             kernel
             build
-          key: ${{ runner.os }}-moto-ellis-v79
+          key: ${{ runner.os }}-moto-ellis-v81
 
       - name: 2. Sync Motorola-Standard Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # Android 12 requires the 'Soong' trio to run lunch
+          # 1. THE BUILD ENGINE (SOONG STACK)
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
           
-          # Prebuilts required for the build system to "boot"
+          # 2. THE PREBUILTS (MAPPED TO SYSTEM PATHS)
+          # These must exist at 'prebuilts/...' for microfactory to find them
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           
-          ln -s make/envsetup.sh build/envsetup.sh
-          # Motorola Kernel Source
+          # 3. KERNEL SOURCE
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Sync Private Hardware Blobs
+      - name: 3. Device Tree & Products Setup
         run: |
-          git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
-
-      - name: 4. Modern Android Products Setup (No Obsolete Bloat)
-        run: |
+          # Create the device directory for Hawaii (Ellis)
           DEVICE_PATH="device/motorola/hawaii"
           mkdir -p $DEVICE_PATH
           
-          # The Android 12 Standard for lunch choices
-          cat <<EOF > $DEVICE_PATH/AndroidProducts.mk
-          COMMON_LUNCH_CHOICES := full_hawaii-eng
-          EOF
+          # Android 12 standard lunch registration
+          echo "COMMON_LUNCH_CHOICES := full_hawaii-eng" > $DEVICE_PATH/AndroidProducts.mk
           
           cat <<EOF > $DEVICE_PATH/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_BOARD_PLATFORM := mt6765
           TARGET_DEVICE := hawaii
-          BOARD_PREBUILT_DTBIMAGE := \$(TOP)/dtb_repo/boot.img-dtb
-          BOARD_INCLUDE_DTB_IN_BOOTIMG := true
           EOF
+          
+          # Sync DTB for stitching
+          git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
 
-      - name: 5. Execution (Standard Motorola Lunch Protocol)
+      - name: 4. Execution (Standard Soong Bootstrap)
         run: |
           export TOP=$(pwd)
-          # We must use 'source' to load the functions into the current shell
-          source build/envsetup.sh
           
-          # Now that Soong is present, lunch will find Hawaii via AndroidProducts.mk
+          # Ensure prebuilt tools are visible to the shell before running envsetup
+          export PATH=$TOP/prebuilts/go/linux-x86/bin:$TOP/prebuilts/ninja/linux-x86:$TOP/prebuilts/build-tools/linux-x86/bin:$PATH
+          
+          # Initialize the Motorola/Android Build Environment
+          source build/make/envsetup.sh
+          
+          # Lunch will now trigger the Soong/Blueprint bootstrap using Go
           lunch full_hawaii-eng
           
-          # Identify the exact Clang version from prebuilts
+          # Setup Kernel Build Environment
           CLANG_DIR=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
-          export PATH="$CLANG_DIR:$TOP/prebuilts/build-tools/linux-x86/bin:$PATH"
+          export PATH="$CLANG_DIR:$PATH"
           
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # 1. Initialize with Hawaii Master (This pulls the MTK headers)
+          # Load Hawaii Master Config
           make $KBUILD_ARGS vendor/hawaii_defconfig
           
-          # 2. HID & Engineering Injections
+          # HID & Engineering Injections
           ./scripts/config --file $TOP/out/.config --enable CONFIG_MACH_MT6765
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           
-          # 3. Finalize Config (Synchronizes the MACH selection with MTK sub-drivers)
+          # Finalize and Build
           make $KBUILD_ARGS olddefconfig
-          
-          # 4. Compile Kernel
           make $KBUILD_ARGS Image.gz
 
-          # 5. Precision Stitch
+          # Stitch DTB
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
           cat $TOP/out/arch/arm64/boot/Image.gz \
               $TOP/dtb_repo/boot.img-dtb-offset \
               $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
 
-      - name: 6. Archive Build Artifacts
+      - name: 5. Archive Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-standard-v79
+          name: moto-g-pure-factory-v81
           path: |
             out/arch/arm64/boot/Image.gz-dtb
             out/.config
