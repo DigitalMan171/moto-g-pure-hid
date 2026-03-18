@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Build v69
+name: Motorola Ellis Factory Build v70
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
             build
             device
             out/.config
-          key: ${{ runner.os }}-moto-ellis-v69-stable
+          key: ${{ runner.os }}-moto-ellis-v70-stable
 
       - name: 2. Sync Infrastructure (If Cache Miss)
         if: steps.cache-all.outputs.cache-hit != 'true'
@@ -37,8 +37,8 @@ jobs:
       - name: 3. Sync Private Hardware Blobs
         run: |
           export TOP=$(pwd)
-          # Using your Classic Token to grab the offset and map
-          git clone https://x-access-token:${{ secrets.MY_PRIVATE_TOKEN }}@github.com/digitalman171/ellis-dtb.git $TOP/dtb_repo
+          # Using your specific secret name: DTBTOKEN
+          git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git $TOP/dtb_repo
 
       - name: 4. Hardware Identity & 64-bit Logic
         run: |
