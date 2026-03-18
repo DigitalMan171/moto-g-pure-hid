@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Save & Verify
+name: Motorola Ellis Official Factory Protocol
 on: [workflow_dispatch]
 
 jobs:
@@ -12,75 +12,66 @@ jobs:
           path: |
             prebuilts/clang/host/linux-x86
             kernel
-            build
-          key: ${{ runner.os }}-moto-ellis-v11
+          key: ${{ runner.os }}-moto-ellis-v13
 
-      - name: 2. Fresh Sync (If Cache Miss)
+      - name: 2. Official Source Sync (Direct Hierarchy)
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # A. Official Android Clang Toolchain
+          # A. Official Android Clang Toolchain (Standard Path)
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
           prebuilts/clang/host/linux-x86
           
-          # B. Core Kernel Source
+          # B. Core Kernel Source (Official Motorola LLC Branch)
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 \
           https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           
-          # C. Official Build Tools
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-prebuilts-kernel-build-tools.git build
-          
-          # D. Supplemental Modules
+          # C. Vendor Hardware Modules (Official Path)
           mkdir -p kernel/vendor/motorola
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
 
-      - name: 3. Topology Verification & Pathing
+      - name: 3. Environment Authorization (The "Lunch" Setup)
         run: |
-          echo "--- DETECTED BASE DIRECTORY STRUCTURE ---"
-          ls -d $GITHUB_WORKSPACE/*
-          
-          echo "--- VERIFYING BUILD TOOLS CONTENTS ---"
-          if [ -d "build" ]; then
-            ls -R build | head -n 20
-          else
-            echo "ERROR: Build directory not found!"
-            exit 1
-          fi
-          
-          # Authorized Bin Paths
-          MOTO_BIN="$GITHUB_WORKSPACE/build/linux-x86/bin"
+          # 1. Locate the official Android Clang compiler
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
-          
-          echo "$MOTO_BIN" >> $GITHUB_PATH
           echo "$CLANG_BIN" >> $GITHUB_PATH
           
-          # Use 'find' only once here to authorize the exact path for the next step
-          REAL_SCRIPT=$(find $GITHUB_WORKSPACE/build -name "build.sh" | head -n 1)
-          echo "MOTO_SCRIPT_PATH=$REAL_SCRIPT" >> $GITHUB_ENV
-          chmod +x "$REAL_SCRIPT"
+          # 2. Motorola Protocol: The build script is located at 'kernel/build.sh' 
+          # OR 'kernel/scripts/build.sh'. We authorize the internal kernel one.
+          if [ -f "kernel/build.sh" ]; then
+            chmod +x kernel/build.sh
+            echo "MOTO_ENTRY=kernel/build.sh" >> $GITHUB_ENV
+          else
+            chmod +x kernel/scripts/build.sh
+            echo "MOTO_ENTRY=kernel/scripts/build.sh" >> $GITHUB_ENV
+          fi
 
-      - name: 4. Execution (Lunch Protocol)
+      - name: 4. Execution (Motorola Factory Build)
         run: |
+          # Official Lunch Parameters for Ellis (Moto G Pure)
           export ARCH=arm64
           export PROJECT=ellis
           export MTK_PLATFORM=mt6765
           export TARGET_BUILD_VARIANT=eng
           
+          # Internal MediaTek Output Paths
           export OUT_DIR=$GITHUB_WORKSPACE/out
           export DIST_DIR=$GITHUB_WORKSPACE/dist
-          export INSTALL_MOD_STRIP="--strip-unneeded"
+          mkdir -p $OUT_DIR $DIST_DIR
           
-          # Trigger the detected script path
-          bash "${{ env.MOTO_SCRIPT_PATH }}" -j$(nproc) \
+          # Trigger the build from the kernel root using the internal script
+          # This is exactly what Motorola's 'm' command does
+          cd kernel
+          bash $(basename ${{ env.MOTO_ENTRY }}) -j$(nproc) \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             KBUILD_DEFCONFIG=ellis_defconfig
 
-      - name: 5. Archive
+      - name: 5. Archive Factory Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-verify-run
+          name: moto-g-pure-ellis-official
           path: |
             dist/Image.gz*
             dist/*.ko
