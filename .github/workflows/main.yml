@@ -1,54 +1,98 @@
-name: Motorola Ellis Blueprint Discovery
+name: Motorola Ellis Factory Skeleton Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Total Cloud Save (v17)
+      - name: 1. Total Cloud Save (v20)
         id: cache-all
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86
             kernel
-          key: ${{ runner.os }}-moto-ellis-v17
+            build/make
+            out
+          key: ${{ runner.os }}-moto-ellis-v20
 
-      - name: 2. Sync Kernel & Secondary Device Tree
+      - name: 2. Sync Core Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # Kernel Source
+          # A. The Build 'Brain' (envsetup.sh / lunch logic)
+          git clone --depth=1 https://android.googlesource.com/platform/build build/make
+          
+          # B. The Official Compiler
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          
+          # C. The Kernel Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           
-          # Secondary Device Tree (Community Repo)
-          git clone --depth=1 https://github.com/juic3b0x/device_motorola_ellis device/motorola/ellis
-          
-          # Android Clang
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          # D. Motorola Vendor Modules
+          mkdir -p kernel/vendor/motorola
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
 
-      - name: 3. Search for the Blueprint (.dts)
+      - name: 3. Inject Mock Device Tree (Identity)
         run: |
-          echo "--- SEARCHING KERNEL FOR ELLIS DTS ---"
-          find kernel/arch/arm64/boot/dts -name "*ellis*" || echo "Not in Kernel"
+          mkdir -p device/motorola/ellis
           
-          echo "--- SEARCHING SECONDARY REPO ---"
-          find device/motorola/ellis -name "*.dts*" || echo "Not in Device Repo"
-          
-          # If we find nothing, we will need to extract from boot.img in the next run
-          if ! find . -name "*ellis*.dts" | grep -q "."; then
-            echo "STATUS: Blueprint Missing. Protocol Plan B Required (boot.img extraction)."
-          fi
+          # Create the lunch menu entry
+          cat <<EOF > device/motorola/ellis/AndroidProducts.mk
+          PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
+          COMMON_LUNCH_CHOICES := full_ellis-userdebug
+          EOF
 
-      - name: 4. Path Authorization
+          # Define the product identity
+          cat <<EOF > device/motorola/ellis/full_ellis.mk
+          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
+          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
+          PRODUCT_DEVICE := ellis
+          PRODUCT_NAME := full_ellis
+          PRODUCT_BRAND := Motorola
+          PRODUCT_MODEL := Moto G Pure
+          EOF
+
+          # Define basic architecture for the build system
+          cat <<EOF > device/motorola/ellis/BoardConfig.mk
+          TARGET_ARCH := arm64
+          TARGET_ARCH_VARIANT := armv8-a
+          TARGET_CPU_VARIANT := generic
+          TARGET_BOARD_PLATFORM := mt6765
+          # Point the build system to our kernel location
+          TARGET_PREBUILT_KERNEL := kernel/arch/arm64/boot/Image.gz
+          BOARD_KERNEL_PAGESIZE := 4096
+          EOF
+
+      - name: 4. Execution (Official Factory Protocol)
         run: |
+          # Define the root of our tree
+          export TOP=$(pwd)
+          
+          # Initialize the AOSP environment functions
+          source build/make/envsetup.sh
+          
+          # Select the 'Ellis' target we just mocked
+          lunch full_ellis-userdebug
+          
+          # Identify the Clang toolchain and add to path for the sub-make calls
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
-          echo "$CLANG_BIN" >> $GITHUB_PATH
-
-      - name: 5. Kbuild Execution (Attempt)
-        run: |
-          cd kernel
-          KBUILD_ARGS="-j$(nproc) O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
+          export PATH="$CLANG_BIN:$PATH"
           
-          # Attempting to load the Ellis config
-          # This will likely fail if the device tree isn't linked correctly
-          make $KBUILD_ARGS ellis_defconfig || make $KBUILD_ARGS mt6765_defconfig
+          # Build arguments for the kernel portion
+          # We use 'm' which is the lunch-aware build command
+          # We specifically target the bootimage/kernel
+          m bootimage -j$(nproc) \
+            LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            KBUILD_DEFCONFIG=ellis_defconfig
+
+      - name: 5. Archive Factory Image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moto-g-pure-ellis-factory-v20
+          path: |
+            out/target/product/ellis/boot.img
+            out/target/product/ellis/kernel
+            out/.config
