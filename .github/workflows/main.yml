@@ -1,11 +1,11 @@
-name: Motorola Ellis Factory Skeleton Build
+name: Motorola Ellis Reliable Factory Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Total Cloud Save (v20)
+      - name: 1. Total Cloud Save (v21)
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -13,36 +13,34 @@ jobs:
             prebuilts/clang/host/linux-x86
             kernel
             build/make
-            out
-          key: ${{ runner.os }}-moto-ellis-v20
+          key: ${{ runner.os }}-moto-ellis-v21
 
-      - name: 2. Sync Core Infrastructure
+      - name: 2. Sync Version-Matched Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # A. The Build 'Brain' (envsetup.sh / lunch logic)
-          git clone --depth=1 https://android.googlesource.com/platform/build build/make
+          # CRITICAL: We MUST use the Android 12 branch to match the Ellis Kernel
+          git clone --depth=1 -b android-12-release https://android.googlesource.com/platform/build build/make
           
-          # B. The Official Compiler
+          # Sync Clang & Kernel (Same as before)
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          
-          # C. The Kernel Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          
-          # D. Motorola Vendor Modules
-          mkdir -p kernel/vendor/motorola
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
 
-      - name: 3. Inject Mock Device Tree (Identity)
+      - name: 3. Reliable Device Identity (The Wrapper)
         run: |
           mkdir -p device/motorola/ellis
           
-          # Create the lunch menu entry
+          # A. The Lunch Registry (Register 'ellis' as a valid choice)
+          cat <<EOF > device/motorola/ellis/vendorsetup.sh
+          add_lunch_combo full_ellis-userdebug
+          EOF
+
+          # B. The Product Map
           cat <<EOF > device/motorola/ellis/AndroidProducts.mk
           PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
           COMMON_LUNCH_CHOICES := full_ellis-userdebug
           EOF
 
-          # Define the product identity
+          # C. Product Identity
           cat <<EOF > device/motorola/ellis/full_ellis.mk
           \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
           \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
@@ -52,47 +50,50 @@ jobs:
           PRODUCT_MODEL := Moto G Pure
           EOF
 
-          # Define basic architecture for the build system
+          # D. Factory Board Logic
           cat <<EOF > device/motorola/ellis/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_ARCH_VARIANT := armv8-a
           TARGET_CPU_VARIANT := generic
           TARGET_BOARD_PLATFORM := mt6765
-          # Point the build system to our kernel location
-          TARGET_PREBUILT_KERNEL := kernel/arch/arm64/boot/Image.gz
-          BOARD_KERNEL_PAGESIZE := 4096
+          # Factory standard: kernel is at 'kernel'
+          TARGET_KERNEL_SOURCE := kernel
+          TARGET_KERNEL_CONFIG := ellis_defconfig
           EOF
 
-      - name: 4. Execution (Official Factory Protocol)
+      - name: 4. Execution (Factory Protocol)
         run: |
-          # Define the root of our tree
           export TOP=$(pwd)
           
-          # Initialize the AOSP environment functions
+          # Initialize environment
           source build/make/envsetup.sh
           
-          # Select the 'Ellis' target we just mocked
+          # Now 'lunch' will work because we matched the Android 12 branch
           lunch full_ellis-userdebug
           
-          # Identify the Clang toolchain and add to path for the sub-make calls
+          # Map the Clang Compiler
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
-          export PATH="$CLANG_BIN:$PATH"
+          export PATH="$CLANG_BIN:\$PATH"
           
-          # Build arguments for the kernel portion
-          # We use 'm' which is the lunch-aware build command
-          # We specifically target the bootimage/kernel
-          m bootimage -j$(nproc) \
+          # Build specifically for the kernel
+          # We use the factory 'm' command which handles the relative paths automatically
+          cd kernel
+          make -j\$(nproc) O=\$TOP/out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            KBUILD_DEFCONFIG=ellis_defconfig
+            ellis_defconfig
+          
+          make -j\$(nproc) O=\$TOP/out ARCH=arm64 \
+            LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu-
 
-      - name: 5. Archive Factory Image
+      - name: 5. Archive Reliable Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-factory-v20
+          name: moto-g-pure-ellis-reliable
           path: |
-            out/target/product/ellis/boot.img
-            out/target/product/ellis/kernel
+            out/arch/arm64/boot/Image.gz*
             out/.config
