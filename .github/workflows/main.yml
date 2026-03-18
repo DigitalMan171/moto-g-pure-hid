@@ -1,11 +1,12 @@
-name: Motorola Ellis Factory Build v73
+name: Motorola Ellis Factory Build v77
+# Focus: MACH_MT6765 Activation
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Stable Environment Cache
+      - name: 1. Environment Cache
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -15,95 +16,73 @@ jobs:
             kernel
             build
             device
-            out/.config
-          key: ${{ runner.os }}-moto-ellis-v73-stable
+          key: ${{ runner.os }}-moto-ellis-v77-${{ hashFiles('.github/workflows/*.yml') }}
 
-      - name: 2. Sync Infrastructure (If Cache Miss)
+      - name: 2. Sync Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
-          mkdir -p external
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           ln -s make/envsetup.sh build/envsetup.sh
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Sync Private Hardware Blobs
+      - name: 3. Sync Private Blobs
         run: |
-          export TOP=$(pwd)
-          git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git $TOP/dtb_repo
+          git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
 
-      - name: 4. Save Toolchain State (Pre-Build Backup)
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolchain-environment-verified
-          path: |
-            build/envsetup.sh
-            dtb_repo/
-            prebuilts/build-tools/linux-x86/bin/
-
-      - name: 5. Hardware Identity & Prebuilt DTB Logic
+      - name: 4. Define Hawaii (Ellis) Device
         run: |
-          DEVICE_PATH="device/motorola/ellis"
+          DEVICE_PATH="device/motorola/hawaii"
           mkdir -p $DEVICE_PATH
-          cat <<EOF > $DEVICE_PATH/AndroidProducts.mk
-          PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
-          COMMON_LUNCH_CHOICES := full_ellis-eng
-          EOF
-          cat <<EOF > $DEVICE_PATH/full_ellis.mk
-          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
-          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
-          PRODUCT_DEVICE := ellis
-          PRODUCT_NAME := full_ellis
-          PRODUCT_BRAND := motorola
-          PRODUCT_MODEL := Moto G Pure
-          EOF
+          echo "add_lunch_combo full_hawaii-eng" > $DEVICE_PATH/vendorsetup.sh
           cat <<EOF > $DEVICE_PATH/BoardConfig.mk
           TARGET_ARCH := arm64
-          TARGET_ARCH_VARIANT := armv8-a
-          TARGET_CPU_ABI := arm64-v8a
           TARGET_BOARD_PLATFORM := mt6765
-          TARGET_DEVICE := ellis
-          # Prebuilt DTB instruction for lunch/build system
+          TARGET_DEVICE := hawaii
           BOARD_PREBUILT_DTBIMAGE := \$(TOP)/dtb_repo/boot.img-dtb
           BOARD_INCLUDE_DTB_IN_BOOTIMG := true
-          BOARD_KERNEL_PAGESIZE := 2048
-          BOARD_BOOTIMG_HEADER_VERSION := 2
           EOF
 
-      - name: 6. Execution (HID Injection & Precision Stitch)
+      - name: 5. Execution (MACH_MT6765 Protocol)
         run: |
-          export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           export TOP=$(pwd)
           source build/envsetup.sh
-          lunch full_ellis-eng
+          lunch full_hawaii-eng
+          
           CLANG_BIN=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
+          
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          make $KBUILD_ARGS mt6765_defconfig
+          
+          # 1. Load the Master Hawaii Config (which selects MACH_MT6765)
+          make $KBUILD_ARGS vendor/hawaii_defconfig
+          
+          # 2. Force Enable MACH_MT6765 and HID parameters
+          ./scripts/config --file $TOP/out/.config --enable CONFIG_MACH_MT6765
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
+          
+          # 3. Synchronize Dependencies (Motorola/MTK Requirement)
+          make $KBUILD_ARGS olddefconfig
+          
+          # 4. Build Kernel
           make $KBUILD_ARGS Image.gz
+
+          # 5. Precision Stitch
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
-          # The Motorola Precision Stitch
           cat $TOP/out/arch/arm64/boot/Image.gz \
               $TOP/dtb_repo/boot.img-dtb-offset \
               $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
 
-      - name: 7. Archive Build Artifacts (Crash-Resistant)
+      - name: 6. Archive
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-final-output
+          name: moto-g-pure-final-v77
           path: |
             out/arch/arm64/boot/Image.gz-dtb
             out/.config
-            out/*.log
