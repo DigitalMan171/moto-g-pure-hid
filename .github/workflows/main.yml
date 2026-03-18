@@ -1,93 +1,65 @@
-name: Moto Ellis Full Stack Build v59
+name: Moto Ellis Factory Build v62
 on: [workflow_dispatch]
 
 jobs:
-  prepare_source:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 1. Workspace Persistence
-        id: cache-all
-        uses: actions/cache@v4
-        with:
-          path: |
-            prebuilts
-            kernel
-            build
-            device
-            external
-          key: ${{ runner.os }}-moto-ellis-v59
-
-      - name: 2. Sync & Flatten Structure
-        if: steps.cache-all.outputs.cache-hit != 'true'
-        run: |
-          # 1. Sync the build make system
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/make build_tmp
-          
-          # 2. FLATTEN: Move everything from build_tmp to build/
-          mkdir -p build
-          mv build_tmp/* build/
-          rm -rf build_tmp
-          
-          # 3. Sync supporting build tools
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
-          
-          # 4. Sync Clang & Kernel
-          mkdir -p prebuilts/clang/host/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          
-          # 5. Device Skeleton (Essential for 'lunch')
-          mkdir -p device/motorola/ellis
-          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk" > device/motorola/ellis/AndroidProducts.mk
-          echo 'add_lunch_combo full_ellis-eng' > device/motorola/ellis/vendorsetup.sh
-          touch device/motorola/ellis/full_ellis.mk
-
   build_kernel:
-    needs: prepare_source
     runs-on: ubuntu-latest
     steps:
-      - name: 3. Restore Environment
+      - name: 1. Workspace Cache
         uses: actions/cache@v4
         with:
           path: |
             prebuilts
             kernel
             build
-            device
-            external
             out
-          key: ${{ runner.os }}-moto-ellis-v59
+          key: ${{ runner.os }}-moto-ellis-v62
 
-      - name: 4. Factory Stack Build
+      - name: 2. Sync and Build
         run: |
+          # --- Infrastructure Sync ---
+          if [ ! -d "build/make" ]; then
+            mkdir -p build/make
+            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/make build/make
+            cp build/make/envsetup.sh build/envsetup.sh
+          fi
+
+          if [ ! -d "kernel" ]; then
+            git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
+          fi
+
+          if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
+            mkdir -p prebuilts/clang/host/linux-x86
+            git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          fi
+
+          # --- Build Execution ---
+          export TOP=$(pwd)
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           
-          # Direct source from the flattened directory
+          # Source and Lunch
           source build/envsetup.sh
           lunch full_ellis-eng
           
-          # Set toolchain
-          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
+          # Toolchain Setup
+          CLANG_BIN=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          # Step A: Build Kernel Objects (The Sandwich)
-          make -j2 kernel
+          # Kernel Configuration
+          cd kernel
+          make -j2 O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1 mt6765_defconfig
           
-          # Step B: HID Injection
-          KERNEL_CONFIG="out/target/product/ellis/obj/KERNEL_OBJ/.config"
-          if [ -f "$KERNEL_CONFIG" ]; then
-            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_USB_CONFIGFS_F_HID
-            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_UHID
-            ./kernel/scripts/config --file $KERNEL_CONFIG --disable CONFIG_STRICT_DEVMEM
-            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_DEVMEM
-          fi
+          # USB HID Injection
+          ./scripts/config --file ../out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ./scripts/config --file ../out/.config --enable CONFIG_UHID
+          ./scripts/config --file ../out/.config --disable CONFIG_STRICT_DEVMEM
+          ./scripts/config --file ../out/.config --enable CONFIG_DEVMEM
           
-          # Step C: Re-compile Kernel with new flags
-          make -j2 kernel
+          # Main Compilation
+          make -j2 O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
-      - name: 5. Archive Image
+      - name: 3. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hid-kernel
-          path: out/target/product/ellis/obj/KERNEL_OBJ/arch/arm64/boot/Image.gz-dtb
+          name: moto-g-pure-kernel
+          path: out/arch/arm64/boot/Image.gz-dtb
