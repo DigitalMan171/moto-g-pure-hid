@@ -1,11 +1,11 @@
-name: Motorola Ellis Factory Build v30
+name: Motorola Ellis Factory Build v31
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Save Method (v30)
+      - name: 1. Workspace Persistence (v31)
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -15,86 +15,92 @@ jobs:
             kernel
             build
             device
-          key: ${{ runner.os }}-moto-ellis-v30
+          key: ${{ runner.os }}-moto-ellis-v31
 
-      - name: 2. Sync Corrected Infrastructure (Robust Branching)
+      - name: 2. Sync Parameter Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          echo "--- SYNCING BUILD LOGIC (PINNED TO A12) ---"
-          # These repos REQUIRE the A12 branch to match your kernel's environment
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
+          # Core Build Logic
+          for repo in make soong blueprint; do
+            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/$repo build/$repo
+          done
           
-          echo "--- SYNCING EXTERNAL DEPS ---"
+          # External Dependencies
           mkdir -p external
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
           
-          echo "--- SYNCING PREBUILT TOOLS (DEFAULT BRANCHES) ---"
-          # Using default branches for prebuilts to avoid "branch not found" errors
+          # Prebuilt Tools (Latest/Default branches)
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           
-          # Establish standard root entry point
           ln -s make/envsetup.sh build/envsetup.sh
           
-          echo "--- SYNCING MOTOROLA KERNEL ---"
+          # Motorola Kernel
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Hardware Identity Injection
+      - name: 3. Hardware Identity (The Triple Crown)
         run: |
           mkdir -p device/motorola/ellis
+          
+          # A. The Registry
           cat <<EOF > device/motorola/ellis/AndroidProducts.mk
           PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
           COMMON_LUNCH_CHOICES := full_ellis-userdebug
           EOF
 
+          # B. The Product Definition
           cat <<EOF > device/motorola/ellis/full_ellis.mk
-          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
           \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
           PRODUCT_DEVICE := ellis
           PRODUCT_NAME := full_ellis
+          PRODUCT_BRAND := motorola
+          PRODUCT_MODEL := Moto G Pure
           EOF
 
-      - name: 4. Execution (AOSP Bootstrap & Parameter Build)
+          # C. The Missing Link: Hardware Configuration
+          cat <<EOF > device/motorola/ellis/BoardConfig.mk
+          TARGET_DEVICE := ellis
+          TARGET_BOARD_PLATFORM := mt6765
+          TARGET_ARCH := arm64
+          TARGET_ARCH_VARIANT := armv8-a
+          TARGET_CPU_VARIANT := generic
+          TARGET_2ND_ARCH := arm
+          TARGET_2ND_ARCH_VARIANT := armv8-a
+          TARGET_2ND_CPU_VARIANT := generic
+          EOF
+
+      - name: 4. Execution (Factory Parameters)
         run: |
           export TOP=$(pwd)
-          
-          # Force execution permissions for the toolchain
           find prebuilts -type f -executable -exec chmod +x {} + 2>/dev/null || true
           
-          # Initialize the build shell
           source build/envsetup.sh
           
-          # Select Ellis Parameters
+          # This should now succeed because BoardConfig.mk exists
           lunch full_ellis-userdebug
           
-          # Locate Clang for Kernel Build
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          # Build within Kernel context
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # Initial Factory Defconfig
           make $KBUILD_ARGS ellis_defconfig
           
-          # Enable Project-Specific HID Parameters
+          # Apply HID parameters for the Project
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_HID_GENERIC
           
-          # Final Compilation
           make $KBUILD_ARGS
 
       - name: 5. Archive Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-v30
+          name: moto-g-pure-ellis-v31
           path: |
             out/arch/arm64/boot/Image.gz*
             out/.config
