@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Build v70
+name: Motorola Ellis Factory Build v72
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
             build
             device
             out/.config
-          key: ${{ runner.os }}-moto-ellis-v70-stable
+          key: ${{ runner.os }}-moto-ellis-v72-stable
 
       - name: 2. Sync Infrastructure (If Cache Miss)
         if: steps.cache-all.outputs.cache-hit != 'true'
@@ -31,16 +31,23 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           ln -s make/envsetup.sh build/envsetup.sh
-          # Verified Motorola LLC Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
       - name: 3. Sync Private Hardware Blobs
         run: |
           export TOP=$(pwd)
-          # Using your specific secret name: DTBTOKEN
           git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git $TOP/dtb_repo
 
-      - name: 4. Hardware Identity & 64-bit Logic
+      - name: 4. Save Toolchain State (Pre-Build Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-environment-verified
+          path: |
+            build/envsetup.sh
+            dtb_repo/
+            prebuilts/build-tools/linux-x86/bin/
+
+      - name: 5. Hardware Identity & 64-bit Logic
         run: |
           DEVICE_PATH="device/motorola/ellis"
           mkdir -p $DEVICE_PATH
@@ -56,46 +63,41 @@ jobs:
           PRODUCT_BRAND := motorola
           PRODUCT_MODEL := Moto G Pure
           EOF
+          cat <<EOF > $DEVICE_PATH/BoardConfig.mk
+          TARGET_ARCH := arm64
+          TARGET_ARCH_VARIANT := armv8-a
+          TARGET_CPU_ABI := arm64-v8a
+          TARGET_BOARD_PLATFORM := mt6765
+          TARGET_DEVICE := ellis
+          EOF
 
-      - name: 5. Execution (HID Injection & Precision Stitch)
+      - name: 6. Execution (HID Injection & Precision Stitch)
         run: |
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           export TOP=$(pwd)
           source build/envsetup.sh
           lunch full_ellis-eng
-          
-          # Toolchain Setup
           CLANG_BIN=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
-          
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          
-          # Build from base config
           make $KBUILD_ARGS mt6765_defconfig
-          
-          # Enable HID and Engineering Mode
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
-          
-          # Compile Kernel Binary
           make $KBUILD_ARGS Image.gz
-
-          # --- THE MOTOROLA PRECISION STITCH ---
-          # 1. Pad kernel to 4-byte boundary
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
-          
-          # 2. Combine: Kernel + Your Private Offset + Your Private DTB Map
           cat $TOP/out/arch/arm64/boot/Image.gz \
               $TOP/dtb_repo/boot.img-dtb-offset \
               $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
 
-      - name: 6. Archive Build Artifacts
+      - name: 7. Archive Build Artifacts (Crash-Resistant)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hid-kernel
+          name: moto-g-pure-final-output
           path: |
             out/arch/arm64/boot/Image.gz-dtb
             out/.config
+            out/*.log
