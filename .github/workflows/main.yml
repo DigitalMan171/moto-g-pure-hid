@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Build v72
+name: Motorola Ellis Factory Build v73
 on: [workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
             build
             device
             out/.config
-          key: ${{ runner.os }}-moto-ellis-v72-stable
+          key: ${{ runner.os }}-moto-ellis-v73-stable
 
       - name: 2. Sync Infrastructure (If Cache Miss)
         if: steps.cache-all.outputs.cache-hit != 'true'
@@ -47,7 +47,7 @@ jobs:
             dtb_repo/
             prebuilts/build-tools/linux-x86/bin/
 
-      - name: 5. Hardware Identity & 64-bit Logic
+      - name: 5. Hardware Identity & Prebuilt DTB Logic
         run: |
           DEVICE_PATH="device/motorola/ellis"
           mkdir -p $DEVICE_PATH
@@ -69,6 +69,11 @@ jobs:
           TARGET_CPU_ABI := arm64-v8a
           TARGET_BOARD_PLATFORM := mt6765
           TARGET_DEVICE := ellis
+          # Prebuilt DTB instruction for lunch/build system
+          BOARD_PREBUILT_DTBIMAGE := \$(TOP)/dtb_repo/boot.img-dtb
+          BOARD_INCLUDE_DTB_IN_BOOTIMG := true
+          BOARD_KERNEL_PAGESIZE := 2048
+          BOARD_BOOTIMG_HEADER_VERSION := 2
           EOF
 
       - name: 6. Execution (HID Injection & Precision Stitch)
@@ -88,6 +93,7 @@ jobs:
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           make $KBUILD_ARGS Image.gz
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
+          # The Motorola Precision Stitch
           cat $TOP/out/arch/arm64/boot/Image.gz \
               $TOP/dtb_repo/boot.img-dtb-offset \
               $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
