@@ -1,65 +1,54 @@
-name: Motorola Ellis Cloud-Save (Direct Kbuild)
+name: Motorola Ellis Blueprint Discovery
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Save Method (Total Cloud Cache)
+      - name: 1. Total Cloud Save (v17)
         id: cache-all
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86
             kernel
-            out
-          key: ${{ runner.os }}-moto-ellis-v15
+          key: ${{ runner.os }}-moto-ellis-v17
 
-      - name: 2. Factory Sync (Only if Cache Misses)
+      - name: 2. Sync Kernel & Secondary Device Tree
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          # Kernel Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          mkdir -p kernel/vendor/motorola
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
-
-      - name: 3. Path Authorization
-        run: |
-          # Locate and Verify Clang
-          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
-          if [ -z "$CLANG_BIN" ]; then echo "Toolchain Missing!"; exit 1; fi
-          echo "$CLANG_BIN" >> $GITHUB_PATH
           
-          # Create Output Dirs
-          mkdir -p $GITHUB_WORKSPACE/out $GITHUB_WORKSPACE/dist
+          # Secondary Device Tree (Community Repo)
+          git clone --depth=1 https://github.com/juic3b0x/device_motorola_ellis device/motorola/ellis
+          
+          # Android Clang
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
 
-      - name: 4. Execution (Standard Motorola Kbuild)
+      - name: 3. Search for the Blueprint (.dts)
+        run: |
+          echo "--- SEARCHING KERNEL FOR ELLIS DTS ---"
+          find kernel/arch/arm64/boot/dts -name "*ellis*" || echo "Not in Kernel"
+          
+          echo "--- SEARCHING SECONDARY REPO ---"
+          find device/motorola/ellis -name "*.dts*" || echo "Not in Device Repo"
+          
+          # If we find nothing, we will need to extract from boot.img in the next run
+          if ! find . -name "*ellis*.dts" | grep -q "."; then
+            echo "STATUS: Blueprint Missing. Protocol Plan B Required (boot.img extraction)."
+          fi
+
+      - name: 4. Path Authorization
+        run: |
+          CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
+          echo "$CLANG_BIN" >> $GITHUB_PATH
+
+      - name: 5. Kbuild Execution (Attempt)
         run: |
           cd kernel
+          KBUILD_ARGS="-j$(nproc) O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # The "Lunch" Variables for Ellis
-          export ARCH=arm64
-          export PROJECT=ellis
-          export MTK_PLATFORM=mt6765
-          
-          # Build Arguments
-          # LLVM=1 tells the Makefile to use the Clang we put in the PATH
-          KBUILD_ARGS="-j$(nproc) O=$GITHUB_WORKSPACE/out \
-            LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CLANG_TRIPLE=aarch64-linux-gnu-"
-
-          # Step A: Generate the .config from Motorola's defconfig
-          make $KBUILD_ARGS ellis_defconfig
-          
-          # Step B: Compile the Kernel
-          make $KBUILD_ARGS
-
-      - name: 5. Archive Factory Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: moto-g-pure-ellis-kbuild
-          path: |
-            out/arch/arm64/boot/Image.gz*
-            out/.config
+          # Attempting to load the Ellis config
+          # This will likely fail if the device tree isn't linked correctly
+          make $KBUILD_ARGS ellis_defconfig || make $KBUILD_ARGS mt6765_defconfig
