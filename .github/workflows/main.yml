@@ -1,65 +1,89 @@
-name: Moto Ellis Factory Build v62
+name: Moto Ellis Factory Stack v64
 on: [workflow_dispatch]
 
 jobs:
   build_kernel:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Cache
+      - name: 1. Workspace Cache (Persistent)
         uses: actions/cache@v4
         with:
           path: |
             prebuilts
             kernel
             build
+            device
             out
-          key: ${{ runner.os }}-moto-ellis-v62
+          key: ${{ runner.os }}-moto-ellis-v64
 
-      - name: 2. Sync and Build
+      - name: 2. Install Environment Dependencies
         run: |
-          # --- Infrastructure Sync ---
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl zlib1g-dev bc libssl-dev
+
+      - name: 3. Setup Factory Infrastructure
+        run: |
+          # The URL trailing slash is removed, and tools are cloned to the exact paths expected by envsetup
           if [ ! -d "build/make" ]; then
             mkdir -p build/make
-            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/make build/make
+            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
             cp build/make/envsetup.sh build/envsetup.sh
+            
+            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
+            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
+          fi
+          
+          # Device Skeleton: Gives 'lunch' the target definition it needs to succeed
+          if [ ! -d "device/motorola/ellis" ]; then
+            mkdir -p device/motorola/ellis
+            echo "add_lunch_combo full_ellis-eng" > device/motorola/ellis/vendorsetup.sh
+            echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk" > device/motorola/ellis/AndroidProducts.mk
+            touch device/motorola/ellis/full_ellis.mk
           fi
 
+      - name: 4. Sync Toolchain and Kernel
+        run: |
           if [ ! -d "kernel" ]; then
             git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
           fi
-
           if [ ! -d "prebuilts/clang/host/linux-x86" ]; then
             mkdir -p prebuilts/clang/host/linux-x86
             git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           fi
 
-          # --- Build Execution ---
+      - name: 5. The Factory Stack Build
+        run: |
           export TOP=$(pwd)
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           
-          # Source and Lunch
+          # 1. Initialize the Factory Environment
           source build/envsetup.sh
           lunch full_ellis-eng
           
-          # Toolchain Setup
+          # 2. Setup your verified toolchain
           CLANG_BIN=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          # Kernel Configuration
+          # 3. Enter Kernel and use the Lunch-provided variables
           cd kernel
-          make -j2 O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1 mt6765_defconfig
+          KBUILD_ARGS="-j2 O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # USB HID Injection
-          ./scripts/config --file ../out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file ../out/.config --enable CONFIG_UHID
-          ./scripts/config --file ../out/.config --disable CONFIG_STRICT_DEVMEM
-          ./scripts/config --file ../out/.config --enable CONFIG_DEVMEM
+          # Let the factory makefile handle the defconfig merge based on the lunch target
+          make $KBUILD_ARGS mt6765_defconfig
           
-          # Main Compilation
-          make -j2 O=../out ARCH=arm64 LLVM=1 LLVM_IAS=1
+          # 4. Inject USB HID into the properly merged config
+          ../kernel/scripts/config --file ../out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ../kernel/scripts/config --file ../out/.config --enable CONFIG_UHID
+          ../kernel/scripts/config --file ../out/.config --disable CONFIG_STRICT_DEVMEM
+          ../kernel/scripts/config --file ../out/.config --enable CONFIG_DEVMEM
+          
+          # 5. Final Compilation
+          make $KBUILD_ARGS
 
-      - name: 3. Upload Result
+      - name: 6. Upload Result
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-kernel
-          path: out/arch/arm64/boot/Image.gz-dtb
+          name: moto-g-pure-kernel-v64
+          path: |
+            out/arch/arm64/boot/Image.gz-dtb
+            out/.config
