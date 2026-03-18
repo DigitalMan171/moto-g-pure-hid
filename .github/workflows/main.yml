@@ -1,25 +1,24 @@
-name: Motorola Ellis Factory Build v52
+name: Motorola Ellis Factory Build v57
 on: [workflow_dispatch]
 
 jobs:
-  build:
+  prepare_source:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Stable Environment Cache
-        id: cache-all
+      - name: 1. Persistent Source Cache
+        id: cache-source
         uses: actions/cache@v4
         with:
           path: |
             prebuilts
-            external
             kernel
             build
             device
-            out/.config
-          key: ${{ runner.os }}-moto-ellis-v52-stable
+            external
+          key: ${{ runner.os }}-moto-ellis-source-v57
 
-      - name: 2. Sync Infrastructure (If Cache Miss)
-        if: steps.cache-all.outputs.cache-hit != 'true'
+      - name: 2. Sync (Only on Cache Miss)
+        if: steps.cache-source.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
@@ -31,84 +30,57 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           ln -s make/envsetup.sh build/envsetup.sh
-          # Verified Motorola LLC Source for Hawaii/Ellis
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Hardware Identity & 64-bit Logic
+  build_kernel:
+    needs: prepare_source
+    runs-on: ubuntu-latest
+    steps:
+      - name: 3. Restore Environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            prebuilts
+            kernel
+            build
+            device
+            external
+            out
+          key: ${{ runner.os }}-moto-ellis-source-v57
+
+      - name: 4. The Full Stack Build
         run: |
-          DEVICE_PATH="device/motorola/ellis"
-          mkdir -p $DEVICE_PATH
-          
-          # Hawaii P is the verified internal name for Ellis in this source
-          DTS_NAME="mt6765_hawaii_p"
-          echo "DTS_NAME=$DTS_NAME" >> $GITHUB_ENV
-
-          # Android Products configuration
-          cat <<EOF > $DEVICE_PATH/AndroidProducts.mk
-          PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
-          COMMON_LUNCH_CHOICES := full_ellis-eng
-          EOF
-
-          # Full Ellis Product Definition (Adding 64-bit app support inheritance)
-          cat <<EOF > $DEVICE_PATH/full_ellis.mk
-          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
-          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
-          PRODUCT_DEVICE := ellis
-          PRODUCT_NAME := full_ellis
-          PRODUCT_BRAND := motorola
-          PRODUCT_MODEL := Moto G Pure
-          EOF
-
-          # Board Configuration
-          cat <<EOF > $DEVICE_PATH/BoardConfig.mk
-          TARGET_ARCH := arm64
-          TARGET_ARCH_VARIANT := armv8-a
-          TARGET_CPU_ABI := arm64-v8a
-          TARGET_BOARD_PLATFORM := mt6765
-          TARGET_NO_KERNEL := false
-          BOARD_KERNEL_PAGESIZE := 2048
-          BOARD_BOOTIMG_HEADER_VERSION := 2
-          KERNEL_DEFCONFIG := mt6765_defconfig
-          TARGET_KERNEL_CONFIG := ellis_defconfig
-          EOF
-
-      - name: 4. The Hawaii-Eng Build (Verified Parameters)
-        run: |
-          # Bypass NSJail / Sandbox issues in GitHub Actions environment
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           export TOP=$(pwd)
           source build/envsetup.sh
+          
+          # Factory Entry
           lunch full_ellis-eng
           
-          # Path to Clang toolchain
+          # Toolchain Injection
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          cd kernel
-          # Reduced parallel jobs to -j2 to ensure memory stability
-          KBUILD_ARGS="-j2 O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
+          # First Pass: Assemble the "Sandwich"
+          # This creates the .config at out/target/product/ellis/obj/KERNEL_OBJ/.config
+          make -j2 bootimage
           
-          # Initialize using the chipset-specific configuration
-          make $KBUILD_ARGS mt6765_defconfig
+          # 5. Inject USB HID into the MERGED .config
+          KERNEL_OUT="out/target/product/ellis/obj/KERNEL_OBJ"
           
-          # Enable USB HID Gadget and Engineering permissions
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
-          ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
+          ./kernel/scripts/config --file $KERNEL_OUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ./kernel/scripts/config --file $KERNEL_OUT/.config --enable CONFIG_UHID
+          ./scripts/config --file $KERNEL_OUT/.config --disable CONFIG_STRICT_DEVMEM
+          ./scripts/config --file $KERNEL_OUT/.config --enable CONFIG_DEVMEM
           
-          # Build the Hardware Map (DTB)
-          make $KBUILD_ARGS mediatek/mt6765_hawaii_p.dtb
-          
-          # Build the Kernel Binary
-          make $KBUILD_ARGS
-          
-          # Stitch the Kernel and the Hardware Map together
-          cat $TOP/out/arch/arm64/boot/Image.gz $TOP/out/out/arch/arm64/boot/dts/mediatek/mt6765_hawaii_p.dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
-      - name: 5. Archive Build Artifacts
+          # Second Pass: Compile with HID
+          # Make detects the .config change and recompiles the kernel binary
+          make -j2 bootimage
+
+      - name: 5. Archive Factory Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-hawaii-p-eng
+          name: moto-g-pure-factory-boot
           path: |
-            out/arch/arm64/boot/Image.gz-dtb
-            out/.config
+            out/target/product/ellis/boot.img
+            out/target/product/ellis/obj/KERNEL_OBJ/arch/arm64/boot/Image.gz-dtb
