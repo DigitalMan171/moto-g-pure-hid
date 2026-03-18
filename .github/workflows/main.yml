@@ -1,56 +1,48 @@
-name: Motorola Ellis Factory Cloud-Save
+name: Motorola Ellis Reliable Factory Build
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Save Method (Cloud Sync v23)
+      - name: 1. Workspace Save Method (Cloud Sync v24)
         id: cache-all
         uses: actions/cache@v4
         with:
           path: |
             prebuilts/clang/host/linux-x86
             kernel
-            build/make
-            out
-          # Incrementing this key forces a fresh download and update to the cloud
-          key: ${{ runner.os }}-moto-ellis-v23
+            build
+            device
+          key: ${{ runner.os }}-moto-ellis-v24
 
-      - name: 2. Factory Sync (Forced Download on Cache Miss)
+      - name: 2. Sync Full Build Infrastructure (Skeleton+)
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          echo "--- STARTING FRESH DOWNLOAD OF FACTORY TOOLS ---"
+          # A. The Build 'Brain' (Pinned to a stable A12 tag)
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
           
-          # A. The Build 'Brain' - Fixed branch name for Android 12
-          git clone --depth=1 -b android12-release https://android.googlesource.com/platform/build build/make
+          # B. The Build 'Muscle' (Soong is required for envsetup.sh)
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
           
-          # B. The Official Compiler
+          # C. Create standard symlinks expected by the scripts
+          ln -s make/envsetup.sh build/envsetup.sh
+          
+          # D. The Official Compiler & Kernel
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          
-          # C. The Kernel Source (Motorola Ellis Branch)
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-          
-          # D. Motorola Vendor Modules
-          mkdir -p kernel/vendor/motorola
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git kernel/vendor/motorola/modules
 
-      - name: 3. Identity Injection (Mock Device Tree)
+      - name: 3. Identity Injection (Clean AndroidProducts Method)
         run: |
           mkdir -p device/motorola/ellis
           
-          # Register the device in the lunch menu
-          cat <<EOF > device/motorola/ellis/vendorsetup.sh
-          add_lunch_combo full_ellis-userdebug
-          EOF
-
-          # Define the product map
+          # We define the lunch choice here to avoid 'add_lunch_combo' obsolete errors
           cat <<EOF > device/motorola/ellis/AndroidProducts.mk
           PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
           COMMON_LUNCH_CHOICES := full_ellis-userdebug
           EOF
 
-          # Identity blueprint
+          # Blueprint for the Moto G Pure
           cat <<EOF > device/motorola/ellis/full_ellis.mk
           \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
           \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
@@ -60,42 +52,40 @@ jobs:
           PRODUCT_MODEL := Moto G Pure
           EOF
 
-      - name: 4. Execution (AOSP Wrapper Protocol)
+      - name: 4. Execution (Factory Protocol Wrapper)
         run: |
           # 1. Prepare Environment
           export TOP=$(pwd)
-          source build/make/envsetup.sh
           
-          # 2. Trigger Lunch (Should now be valid with A12 tools)
+          # Sourcing the script from the standard root-relative path
+          source build/envsetup.sh
+          
+          # 2. Trigger Lunch (Recognizes the choice from AndroidProducts.mk)
           lunch full_ellis-userdebug
           
-          # 3. Locate Clang & Set Paths
+          # 3. Pathing for the Kernel Build
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          # 4. Kernel Compilation Logic
+          # 4. Compile inside the Kernel context
           cd kernel
-          
-          # Standard Motorola Kbuild Arguments
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # Step A: Generate the Ellis config
+          # Initialize with Ellis Config
           make $KBUILD_ARGS ellis_defconfig
           
-          # Step B: Inject your HID/Arduino Project Requirements
-          # This ensures 'Improved Pointer' support is actually in the binary
+          # Force HID features for the Arduino Project
           ../kernel/scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ../kernel/scripts/config --file $TOP/out/.config --enable CONFIG_USB_HID
-          ../kernel/scripts/config --file $TOP/out/.config --enable CONFIG_HID_GENERIC
           
-          # Step C: Final Build
+          # Start final compilation
           make $KBUILD_ARGS
 
-      - name: 5. Final Cloud-Save & Archive
+      - name: 5. Archive Factory Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-v23-final
+          name: moto-g-pure-ellis-v24-final
           path: |
             out/arch/arm64/boot/Image.gz*
             out/.config
