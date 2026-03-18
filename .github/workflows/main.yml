@@ -1,11 +1,11 @@
-name: Motorola Ellis Factory Build v50
+name: Motorola Ellis Factory Build v51
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Persistence (v50)
+      - name: 1. Workspace Persistence (v51)
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -15,7 +15,7 @@ jobs:
             kernel
             build
             device
-          key: ${{ runner.os }}-moto-ellis-v50
+          key: ${{ runner.os }}-moto-ellis-v51
 
       - name: 2. Sync Source (RRHS31.Q3-46-110-7)
         if: steps.cache-all.outputs.cache-hit != 'true'
@@ -30,19 +30,36 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           ln -s make/envsetup.sh build/envsetup.sh
-          # Target the exact Moto G Pure branch
+          # Motorola LLC Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Hardware Mapping (Hawaii P)
+      - name: 3. Hardware Identity (AOSP Tree Correction)
         run: |
-          mkdir -p device/motorola/ellis
+          # 1. Create the correct AOSP-standard path at the root
+          DEVICE_PATH="device/motorola/ellis"
+          mkdir -p $DEVICE_PATH
           
-          # We use the Hawaii P map which matches Ellis hardware
+          # 2. Identify the Hawaii-P map from the kernel source
           DTS_NAME="mt6765_hawaii_p"
           echo "DTS_NAME=$DTS_NAME" >> $GITHUB_ENV
 
-          # Set up the Android build variables
-          cat <<EOF > device/motorola/ellis/BoardConfig.mk
+          # 3. Create AndroidProducts.mk (The 'Lunch' entry point)
+          cat <<EOF > $DEVICE_PATH/AndroidProducts.mk
+          PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
+          COMMON_LUNCH_CHOICES := full_ellis-eng
+          EOF
+
+          # 4. Create full_ellis.mk (The Product Definition)
+          cat <<EOF > $DEVICE_PATH/full_ellis.mk
+          \$(call inherit-product, \$(SRC_TARGET_DIR)/product/full_base.mk)
+          PRODUCT_DEVICE := ellis
+          PRODUCT_NAME := full_ellis
+          PRODUCT_BRAND := motorola
+          PRODUCT_MODEL := Moto G Pure
+          EOF
+
+          # 5. Create BoardConfig.mk (The Hardware Config)
+          cat <<EOF > $DEVICE_PATH/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_ARCH_VARIANT := armv8-a
           TARGET_CPU_ABI := arm64-v8a
@@ -54,12 +71,13 @@ jobs:
           TARGET_KERNEL_CONFIG := ellis_defconfig
           EOF
 
-      - name: 4. The Engineering Stitch Build
+      - name: 4. Execution (The Hawaii-Eng Build)
         run: |
           export TOP=$(pwd)
           source build/envsetup.sh
           lunch full_ellis-eng
           
+          # Setup Clang path
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
@@ -69,21 +87,25 @@ jobs:
           # Initialize Config
           make $KBUILD_ARGS ellis_defconfig
           
-          # Unlocks: HID Gadget + Engineering Permissions
+          # Inject Unlocks (HID Gadget + Engineering Mode)
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           
-          # Final Compile
+          # Compile Kernel
           make $KBUILD_ARGS
+          
+          # Compile Hawaii-P Hardware Map
           make $KBUILD_ARGS mediatek/${{ env.DTS_NAME }}.dtb
           
           # Fusing the HID-unlocked Kernel with the Hawaii-P hardware map
           cat $TOP/out/arch/arm64/boot/Image.gz $TOP/out/arch/arm64/boot/dts/mediatek/${{ env.DTS_NAME }}.dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
 
-      - name: 5. Upload Final Binary
+      - name: 5. Archive Build
         uses: actions/upload-artifact@v4
         with:
           name: moto-g-pure-hawaii-p-eng
-          path: out/arch/arm64/boot/Image.gz-dtb
+          path: |
+            out/arch/arm64/boot/Image.gz-dtb
+            out/.config
