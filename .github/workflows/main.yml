@@ -1,4 +1,4 @@
-name: Motorola Ellis Factory Build v83
+name: Motorola Ellis Factory Build v84
 on: [workflow_dispatch]
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
             kernel
             build
             external
-          key: ${{ runner.os }}-moto-ellis-v83
+          key: ${{ runner.os }}-moto-ellis-v82
 
       - name: 2. Sync Motorola-Standard Infrastructure
         if: steps.cache-all.outputs.cache-hit != 'true'
@@ -33,15 +33,17 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
-          # asuite contains essential wrapper scripts for MTK builds
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/asuite prebuilts/asuite
           
           # 4. KERNEL SOURCE
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Device Tree & Products Setup
+      - name: 3. Path Correction & Device Setup
         run: |
           export TOP=$(pwd)
+          # Use physical copy to satisfy 'cat' operations from legacy scripts
+          mkdir -p build
+          cp build/make/envsetup.sh build/envsetup.sh
+          
           mkdir -p device/motorola/hawaii
           echo "COMMON_LUNCH_CHOICES := full_hawaii-eng" > device/motorola/hawaii/AndroidProducts.mk
           
@@ -53,50 +55,52 @@ jobs:
           
           git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
 
-      - name: 4. Execution (Soong-Correct Protocol)
+      - name: 4. Execution (Standard Soong Bootstrap)
         run: |
           export TOP=$(pwd)
           
-          # EXPLICIT GO ENVIRONMENT (Stops 'exit status 1' in microfactory)
+          # Force Go environment to prevent Microfactory exit status 1
           export GOROOT=$TOP/prebuilts/go/linux-x86
           export PATH=$GOROOT/bin:$TOP/prebuilts/ninja/linux-x86:$TOP/prebuilts/build-tools/linux-x86/bin:$PATH
           
-          # Source directly from build/make
-          source build/make/envsetup.sh
+          # Source from the legacy path we just created
+          source build/envsetup.sh
           
-          # Bootstrapping lunch
+          # Bootstrap lunch (uses external/golang-protobuf)
           lunch full_hawaii-eng
           
-          # Kernel Build Prep
+          # Toolchain Setup
           CLANG_DIR=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_DIR:$PATH"
           
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
+          # Motorola Defconfig
           make $KBUILD_ARGS vendor/hawaii_defconfig
           
-          # Injections
+          # HID Injections
           ./scripts/config --file $TOP/out/.config --enable CONFIG_MACH_MT6765
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           
+          # Final Build
           make $KBUILD_ARGS olddefconfig
           make $KBUILD_ARGS Image.gz
 
-          # Final Stitch
+          # DTB Stitch
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
           cat $TOP/out/arch/arm64/boot/Image.gz \
               $TOP/dtb_repo/boot.img-dtb-offset \
               $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
 
-      - name: 5. Archive
+      - name: 5. Archive Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-factory-v83
+          name: moto-g-pure-factory-v84
           path: |
             out/arch/arm64/boot/Image.gz-dtb
             out/.config
