@@ -72,37 +72,39 @@ jobs:
           TARGET_KERNEL_CONFIG := ellis_defconfig
           EOF
 
-      - name: 4. Execution (The Hawaii-Eng Build)
+      - name: 4. The Hawaii-Eng Build (Verified Parameters)
         run: |
-          # Bypass Sandbox/NSJail issues in GitHub environment
+          # Bypass NSJail / Sandbox issues in GitHub Actions environment
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           export TOP=$(pwd)
           source build/envsetup.sh
           lunch full_ellis-eng
           
-          # Toolchain Setup
+          # Path to Clang toolchain
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
           cd kernel
-          KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
+          # Reduced parallel jobs to -j2 to ensure memory stability
+          KBUILD_ARGS="-j2 O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
           
-          # Initialize Kernel Config
-          make $KBUILD_ARGS ellis_defconfig
+          # Initialize using the chipset-specific configuration
+          make $KBUILD_ARGS mt6765_defconfig
           
-          # Enable HID and Engineering Unlocks
+          # Enable USB HID Gadget and Engineering permissions
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           
-          # Build Binary and Hardware Map
-          make $KBUILD_ARGS
-          make $KBUILD_ARGS mediatek/${{ env.DTS_NAME }}.dtb
+          # Build the Hardware Map (DTB)
+          make $KBUILD_ARGS mediatek/mt6765_hawaii_p.dtb
           
-          # The Motorola Stitch (Kernel + Hawaii-P DTB)
-          cat $TOP/out/arch/arm64/boot/Image.gz $TOP/out/arch/arm64/boot/dts/mediatek/${{ env.DTS_NAME }}.dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
-
+          # Build the Kernel Binary
+          make $KBUILD_ARGS
+          
+          # Stitch the Kernel and the Hardware Map together
+          cat $TOP/out/arch/arm64/boot/Image.gz $TOP/out/out/arch/arm64/boot/dts/mediatek/mt6765_hawaii_p.dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
       - name: 5. Archive Build Artifacts
         uses: actions/upload-artifact@v4
         with:
