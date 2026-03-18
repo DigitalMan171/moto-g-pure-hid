@@ -1,11 +1,11 @@
-name: Motorola Ellis Factory Build v37
+name: Motorola Ellis Factory Build v38
 on: [workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Workspace Persistence (v37)
+      - name: 1. Workspace Persistence (v38)
         id: cache-all
         uses: actions/cache@v4
         with:
@@ -15,33 +15,31 @@ jobs:
             kernel
             build
             device
-          key: ${{ runner.os }}-moto-ellis-v37
+          key: ${{ runner.os }}-moto-ellis-v38
 
-      - name: 2. Sync Parameter Infrastructure
+      - name: 2. Sync Parameter Infrastructure (Corrected URL)
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # Core A12 Build Logic
-          for repo in make soong blueprint; do
-            git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/$repo build/$repo
-          done
+          # The core 'build' repo is at /platform/build, NOT /platform/build/make
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
           
-          # Dependencies & Toolchains
           mkdir -p external
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
+          
+          # Prebuilts (Default branches for better compatibility)
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
           
           ln -s make/envsetup.sh build/envsetup.sh
-          
-          # Motorola Kernel Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
 
-      - name: 3. Hardware Identity (Ellis Mixed-Mode Definition)
+      - name: 3. Hardware Identity (Ellis Mixed-Mode)
         run: |
           mkdir -p device/motorola/ellis
-          
           cat <<EOF > device/motorola/ellis/AndroidProducts.mk
           PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk
           COMMON_LUNCH_CHOICES := full_ellis-userdebug
@@ -72,7 +70,7 @@ jobs:
           BOARD_BOOT_HEADER_VERSION := 2
           EOF
 
-      - name: 4. Execution (Unlock & Gadget Suite)
+      - name: 4. Execution (HID & Engineering Suite)
         run: |
           export TOP=$(pwd)
           find prebuilts -type f -executable -exec chmod +x {} + 2>/dev/null || true
@@ -84,29 +82,21 @@ jobs:
           
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          
           make $KBUILD_ARGS ellis_defconfig
           
-          # --- USB HID GADGET & ARDUINO INTERFACE ---
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS
+          # Enable HID Project & Engineering Access
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_FS
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_HID_GENERIC
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
-          
-          # --- ENGINEERING MODE UNLOCKS ---
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEBUG_FS
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
-          ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
           
-          # Compile
           make $KBUILD_ARGS
 
-      - name: 5. Archive & Compare
+      - name: 5. Archive Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-ellis-v37
+          name: moto-g-pure-ellis-v38
           path: |
             out/arch/arm64/boot/Image.gz*
             out/.config
