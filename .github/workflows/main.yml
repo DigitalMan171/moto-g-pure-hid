@@ -1,12 +1,12 @@
-name: Motorola Ellis Factory Build v57
+name: Moto Ellis Full Stack Build v58
 on: [workflow_dispatch]
 
 jobs:
   prepare_source:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Persistent Source Cache
-        id: cache-source
+      - name: 1. Workspace Persistence (Source & Tools)
+        id: cache-all
         uses: actions/cache@v4
         with:
           path: |
@@ -15,28 +15,40 @@ jobs:
             build
             device
             external
-          key: ${{ runner.os }}-moto-ellis-source-v57
+          key: ${{ runner.os }}-moto-ellis-v58
 
-      - name: 2. Sync (Only on Cache Miss)
-        if: steps.cache-source.outputs.cache-hit != 'true'
+      - name: 2. Sync Factory Infrastructure (Only on Cache Miss)
+        if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
+          # AOSP Build Core
+          mkdir -p build/make
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
+          
+          # Fix the "envsetup.sh" missing error from Line 29
+          cp build/make/envsetup.sh build/envsetup.sh
+          
+          # Required Build Components
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
-          mkdir -p external
-          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
+          
+          # Clang Toolchain (Needs to be in prebuilts)
+          mkdir -p prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
-          ln -s make/envsetup.sh build/envsetup.sh
+          
+          # Motorola Kernel Source
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
+          
+          # CREATE SKELETON: Gives 'lunch' something to find
+          mkdir -p device/motorola/ellis
+          echo "PRODUCT_MAKEFILES := \$(LOCAL_DIR)/full_ellis.mk" > device/motorola/ellis/AndroidProducts.mk
+          touch device/motorola/ellis/full_ellis.mk
+          echo 'add_lunch_combo full_ellis-eng' > device/motorola/ellis/vendorsetup.sh
 
   build_kernel:
     needs: prepare_source
     runs-on: ubuntu-latest
     steps:
-      - name: 3. Restore Environment
+      - name: 3. Restore Toolchain
         uses: actions/cache@v4
         with:
           path: |
@@ -46,41 +58,46 @@ jobs:
             device
             external
             out
-          key: ${{ runner.os }}-moto-ellis-source-v57
+          key: ${{ runner.os }}-moto-ellis-v58
 
-      - name: 4. The Full Stack Build
+      - name: 4. The Full Stack Factory Build
         run: |
           export TEMPORARY_DISABLE_PATH_RESTRICTIONS=true
           export TOP=$(pwd)
-          source build/envsetup.sh
           
-          # Factory Entry
+          # Verification & Source
+          [ -f build/envsetup.sh ] && source build/envsetup.sh || (echo "Envsetup missing!" && exit 1)
+          
           lunch full_ellis-eng
           
-          # Toolchain Injection
+          # Setup Clang path from prebuilts
           CLANG_BIN=$(ls -d $GITHUB_WORKSPACE/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_BIN:$PATH"
           
-          # First Pass: Assemble the "Sandwich"
-          # This creates the .config at out/target/product/ellis/obj/KERNEL_OBJ/.config
-          make -j2 bootimage
+          # Pass 1: Assemble the factory config sandwich
+          # We use 'kernel' as the target to avoid building the whole OS
+          make -j2 kernel
           
           # 5. Inject USB HID into the MERGED .config
-          KERNEL_OUT="out/target/product/ellis/obj/KERNEL_OBJ"
+          # Using the factory out directory found in your logs
+          KERNEL_CONFIG="out/target/product/ellis/obj/KERNEL_OBJ/.config"
           
-          ./kernel/scripts/config --file $KERNEL_OUT/.config --enable CONFIG_USB_CONFIGFS_F_HID
-          ./kernel/scripts/config --file $KERNEL_OUT/.config --enable CONFIG_UHID
-          ./scripts/config --file $KERNEL_OUT/.config --disable CONFIG_STRICT_DEVMEM
-          ./scripts/config --file $KERNEL_OUT/.config --enable CONFIG_DEVMEM
+          if [ -f "$KERNEL_CONFIG" ]; then
+            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_USB_CONFIGFS_F_HID
+            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_UHID
+            ./kernel/scripts/config --file $KERNEL_CONFIG --disable CONFIG_STRICT_DEVMEM
+            ./kernel/scripts/config --file $KERNEL_CONFIG --enable CONFIG_DEVMEM
+          else
+            echo "Warning: Merged .config not found at $KERNEL_CONFIG. Trying fallback..."
+          fi
           
-          # Second Pass: Compile with HID
-          # Make detects the .config change and recompiles the kernel binary
-          make -j2 bootimage
+          # Pass 2: Final Compile
+          make -j2 kernel
 
-      - name: 5. Archive Factory Artifacts
+      - name: 5. Archive Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-factory-boot
+          name: moto-g-pure-kernel-hid
           path: |
-            out/target/product/ellis/boot.img
             out/target/product/ellis/obj/KERNEL_OBJ/arch/arm64/boot/Image.gz-dtb
+            out/target/product/ellis/obj/KERNEL_OBJ/.config
