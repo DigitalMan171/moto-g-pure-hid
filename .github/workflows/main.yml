@@ -35,25 +35,33 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # 1. DTC Fix: Remove the duplicate yylval definition
+          # Use -v to verify files are actually found and modified
           find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/YYSTYPE yylval;//g' {} +
-
-          # 2. HID Fix: Inject the page size check into the HID gadget driver
-          # This version uses a simpler append to avoid 'sed' delimiter issues
           find . -name "f_hid.c" -exec sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' {} +
-          
           echo "DTC and HID patches applied successfully."
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Force copy the defconfig to the root configs folder to avoid "Can't find" errors
-          DEFCONFIG_PATH=$(find . -name "ellis_defconfig" | head -n 1)
-          cp "$DEFCONFIG_PATH" arch/arm64/configs/ellis_nh_defconfig
+          # 1. Broad Search: Look for anything matching 'ellis' and 'defconfig'
+          # We use -i for case-insensitivity just in case it's 'Ellis_defconfig'
+          CONF_FILE=$(find arch/arm64/configs -iname "*ellis*defconfig*" | head -n 1)
 
+          if [ -z "$CONF_FILE" ]; then
+            echo "CRITICAL ERROR: Could not find ellis_defconfig."
+            echo "Dumping all files in arch/arm64/configs for manual verification:"
+            ls -R arch/arm64/configs
+            exit 1
+          fi
+
+          echo "Found config at: $CONF_FILE"
+          cp "$CONF_FILE" arch/arm64/configs/ellis_nh_defconfig
+
+          # 2. Generate base config
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
+          # 3. Enable HID & Inject Magic IDs
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -62,7 +70,6 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Motorola Magic IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -76,7 +83,6 @@ jobs:
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          # Catch any Image.gz or Image.gz-dtb
           find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
