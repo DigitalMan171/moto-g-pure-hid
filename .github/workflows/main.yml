@@ -22,8 +22,6 @@ jobs:
           mkdir -p prebuilts/clang/host/linux-x86
           mkdir -p prebuilts/gcc/linux-x86/aarch64
           mkdir -p prebuilts/gcc/linux-x86/arm
-          
-          # Using LineageOS mirrors as they are more 'Git-friendly' for specific AOSP versions
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b prebuilts/clang/host/linux-x86/clang-r416183b
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
@@ -32,8 +30,6 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev libc6:i386 libstdc++6:i386 lib32z1 binutils-multiarch
-          
-          # Fix for the 'Ghost' 32-bit binaries on 64-bit Ubuntu
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
           sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
@@ -45,32 +41,36 @@ jobs:
           GCC64_PREFIX=$PREBUILTS/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-
           GCC32_PREFIX=$PREBUILTS/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
           
-          # Pre-flight check
-          echo "Verifying Linker..."
-          if [ ! -f "${GCC64_PREFIX}ld" ]; then
-            echo "ERROR: Linker not found at ${GCC64_PREFIX}ld"
-            ls -R $PREBUILTS/gcc/linux-x86/aarch64/
-            exit 1
-          fi
-          ${GCC64_PREFIX}ld --version
-          
           cd kernel
           export PATH=$CLANG_PATH:$PATH
           export LD_LIBRARY_PATH=$PREBUILTS/clang/host/linux-x86/clang-r416183b/lib64:$LD_LIBRARY_PATH
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # Step 1: Defconfig
+          # 1. Defconfig
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX mgk_64_k510_defconfig
           
-          # Step 2: Motorola Config Merge
+          # 2. Motorola Merge
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
           
-          # Step 3: Injection (HID & Storage)
-          ./scripts/config --file $OUT_DIR/.config --enable CONFIG_MTK_ENG_BUILD --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_USB_CONFIGFS --enable CONFIG_HID_GENERIC --enable CONFIG_USB_GADGET --enable CONFIG_MTK_MSDC --enable CONFIG_MMC_MTK --enable CONFIG_MTK_RPMB --enable CONFIG_MTK_RPMB_SUPPORT --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
+          # 3. FIX DEPENDENCY INJECTION
+          ./scripts/config --file $OUT_DIR/.config \
+            --enable CONFIG_MTK_ENG_BUILD \
+            --enable CONFIG_USB_G_HID \
+            --enable CONFIG_USB_CONFIGFS_F_HID \
+            --enable CONFIG_USB_CONFIGFS \
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_USB_GADGET \
+            --set-val CONFIG_MMC y \
+            --set-val CONFIG_MTK_MSDC y \
+            --enable CONFIG_MTK_RPMB \
+            --enable CONFIG_MTK_RPMB_SUPPORT \
+            --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
           
-          # Step 4: Finalize & Compile
+          # 4. Olddefconfig to resolve the newly set 'y' values
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX olddefconfig
+          
+          # 5. Compile
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX Image.gz dtbs -j$(nproc)
       - name: Package Image.gz-dtb
         run: |
