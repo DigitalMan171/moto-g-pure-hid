@@ -42,7 +42,7 @@ jobs:
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
-               ellis_defconfig
+               ext_config/ellis_defconfig
           
           # 2. Inject Engineering/Factory Overrides
           if [ -f arch/arm64/configs/factory-k62v1_32_bsp-ellis.config ]; then
