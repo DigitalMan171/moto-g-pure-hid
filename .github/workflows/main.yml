@@ -11,58 +11,66 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
-          fetch-depth: 1 # Shallow clone to save time/space
+          fetch-depth: 1
           path: kernel
 
-      - name: Setup Build Tools & Toolchain
+      - name: Setup Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
           
-          # Increase Git buffers for large transfers
+          # Use a more compatible version of Proton Clang or standard AOSP Clang
           git config --global http.postBuffer 524288000
-          git config --global core.compression 0
-          
-          # Clone Proton Clang (Much more reliable than AOSP Clang for CI)
           git clone --depth=1 https://github.com/kdrag0n/proton-clang toolchain
 
       - name: Sync Techpacks
         run: |
           cd kernel
           mkdir -p techpack/display techpack/audio
-          # Using shallow clones for techpacks as well
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-display techpack/display
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-audio techpack/audio
 
       - name: Build Engineering Stack
         run: |
           cd kernel
-          # Setup paths for Proton Clang
+          # CRITICAL FIX: We add the toolchain to the path, 
+          # but we force the kernel to use the system's HOSTCC for build tools.
           export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
           
           OUT_DIR=out
-          # Initialize Config
-          make O=$OUT_DIR ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang ellis_defconfig
           
-          # Inject Engineering/Factory Overrides
+          # 1. Initialize Config
+          make O=$OUT_DIR ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               CC=clang \
+               HOSTCC=gcc \
+               HOSTCXX=g++ \
+               ellis_defconfig
+          
+          # 2. Inject Engineering/Factory Overrides
           if [ -f arch/arm64/configs/factory-k62v1_32_bsp-ellis.config ]; then
             ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/factory-k62v1_32_bsp-ellis.config
           fi
           
-          # Force-Enable HID and Engineering logic
+          # 3. Force-Enable HID and Engineering logic
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_MTK_SCHED_MONITOR
+            --enable CONFIG_HID_GENERIC
             
-          # Compile using LLVM/Clang
+          # 4. Compile
+          # We explicitly define LD_LIBRARY_PATH to avoid the 'libc' mismatch
+          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/toolchain/lib:$LD_LIBRARY_PATH
+          
           make O=$OUT_DIR ARCH=arm64 \
                CROSS_COMPILE=aarch64-linux-gnu- \
                CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                CC=clang \
+               HOSTCC=gcc \
+               HOSTCXX=g++ \
                AR=llvm-ar \
                NM=llvm-nm \
                OBJCOPY=llvm-objcopy \
