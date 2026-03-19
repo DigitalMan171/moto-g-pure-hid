@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Legacy Forward
+name: Ellis Engineering Build - Chain Link Fix
 
 on:
   workflow_dispatch:
@@ -14,7 +14,6 @@ env:
 
 jobs:
   build:
-    # Use the available runner
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Kernel Source
@@ -30,16 +29,22 @@ jobs:
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
 
-      - name: Setup Build Environment (Manual Legacy Support)
+      - name: Setup Build Environment (Full Legacy Stack)
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev \
             libc6:i386 libstdc++6:i386 lib32z1
           
-          # Manually fetch libncurses5:i386 which is missing from Ubuntu 22.04+ repos
+          # 1. Fetch both dependent legacy libraries
+          wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
-          sudo dpkg -i libncurses5_6.2-0ubuntu2_i386.deb
+          
+          # 2. Install them simultaneously so dpkg can resolve the internal dependency
+          sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
+          
+          # 3. Force fix any remaining broken dependencies
+          sudo apt-get install -y -f
 
       - name: Build Engineering Stack
         run: |
@@ -50,8 +55,9 @@ jobs:
           export PATH=$TOOLCHAIN_DIR/clang-aosp/bin:$TOOLCHAIN_DIR/gcc64/bin:$TOOLCHAIN_DIR/gcc32/bin:$PATH
           export LD_LIBRARY_PATH=$TOOLCHAIN_DIR/clang-aosp/lib64:$LD_LIBRARY_PATH
           
-          # 2. VERIFY (The "Stuck" Killer)
-          # If the library install worked, this will print the version instead of failing
+          # 2. VERIFY (The Linker Test)
+          # If this step passes, your environment is officially 'Factory Grade'
+          echo "Testing GCC 4.9 Linker Execution..."
           aarch64-linux-android-ld --version
           
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
@@ -65,7 +71,7 @@ jobs:
                CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
                mgk_64_k510_defconfig
 
-          # 4. MERGE PROJECT CONFIG
+          # 4. MERGE
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
             $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
 
