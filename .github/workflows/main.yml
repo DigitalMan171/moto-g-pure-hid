@@ -19,11 +19,11 @@ jobs:
 
       - name: Setup AOSP Clang & Fix Missing Libs
         run: |
-          # 1. Install libtinfo5 (Legacy requirement for Clang on Ubuntu 24.04)
+          # 1. Install libtinfo5 for Ubuntu 24.04 compatibility
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
-          # 2. Download Clang r416183b via a direct commit-hash archive
+          # 2. Download Clang r416183b via direct commit-hash archive
           mkdir clang
           cd clang
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
@@ -31,20 +31,20 @@ jobs:
 
       - name: Apply Targeted NetHunter Fixes
         run: |
-          # We use the GitHub mirror of NetHunter patches to avoid GitLab's 404/Redirect issues
-          # DTC Fix: Prevents "multiple definition of yylloc" errors
+          # DTC Fix: Prevents "multiple definition of yylloc"
           curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch -o dtc.patch
           patch -p1 < dtc.patch || echo "DTC patch already applied"
 
-          # HID Descriptor Fix: Allows high-accuracy mouse/keyboard support
+          # HID Descriptor Fix
           curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/add-hid-support.patch -o hid.patch
-          patch -p1 < hid.patch || echo "HID patch already present or failed gracefully"
+          patch -p1 < hid.patch || echo "HID patch already present or failed"
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # Generate base config
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_defconfig
+          
+          # Using your verified path: ext_config/ellis (omitting .defconfig)
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis
           
           # Enable HID Arsenal switches
           ./scripts/config --file out/.config \
@@ -65,13 +65,13 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # Compile with warnings suppressed
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          # Ensure we grab the correct generated image from the 'out' folder
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ || cp out/arch/arm64/boot/Image.gz AnyKernel3/
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           zip -r ../Ellis-HID-Kernel.zip ./*
