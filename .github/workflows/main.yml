@@ -19,7 +19,7 @@ jobs:
 
       - name: Setup AOSP Clang & Fix Missing Libs
         run: |
-          # Install libtinfo5 for Ubuntu 24.04 compatibility
+          # Install libtinfo5 (Legacy requirement for Clang on Ubuntu 24.04)
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
@@ -31,24 +31,34 @@ jobs:
 
       - name: Apply Targeted NetHunter Fixes
         run: |
-          # RAW links are required to avoid "Garbage found in patch" errors
+          # Using RAW GitHub links to ensure valid patch files (prevents 'Garbage' error)
           curl -LSs "https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch" -o dtc.patch
           curl -LSs "https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/add-hid-support.patch" -o hid.patch
           
-          # Apply patches and ignore errors if already applied
-          patch -p1 < dtc.patch || echo "DTC patch skip"
-          patch -p1 < hid.patch || echo "HID patch skip"
+          patch -p1 < dtc.patch || echo "DTC patch skip/already applied"
+          patch -p1 < hid.patch || echo "HID patch skip/already applied"
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # --- THE FIX FOR 'NO RULE' ---
-          # We manually copy your special config to the root 'configs' folder 
-          # so 'make' can find it without complex path rules.
-          cp arch/arm64/configs/ext_config/ellis_defconfig arch/arm64/configs/ellis_nh_defconfig
+          # --- SEARCH & RESCUE ---
+          # Find the defconfig no matter where it is hiding in the source tree
+          EXT_PATH=$(find . -name "ellis_defconfig" | head -n 1)
           
-          # Now we call it simply as 'ellis_nh_defconfig' (or just 'ellis_nh')
+          if [ -z "$EXT_PATH" ]; then
+            echo "ERROR: ellis_defconfig still not found!"
+            echo "Listing all available defconfigs for debugging:"
+            find . -name "*defconfig"
+            exit 1
+          fi
+          
+          echo "Success: Found defconfig at $EXT_PATH"
+          
+          # Copy found file to the standard arch/arm64/configs folder
+          cp "$EXT_PATH" arch/arm64/configs/ellis_nh_defconfig
+          
+          # Generate base config
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
           # Enable HID Arsenal switches
@@ -60,23 +70,26 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Inject Magic USB IDs
+          # Inject Magic USB IDs (Motorola Generic HID Mode)
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
+          # Refresh the config
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- olddefconfig
 
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          # Compile with warnings suppressed (-w) to keep logs clean
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          # Robust copy for the kernel image
+          # Grab any Image.gz variant produced (handles different naming conventions)
           find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
+          # Bypass device check to ensure flashability on Ellis
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           zip -r ../Ellis-HID-Kernel.zip ./*
 
