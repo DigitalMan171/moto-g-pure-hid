@@ -35,23 +35,24 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # 1. DTC Fix: Using find to ensure we hit the right path regardless of nesting
-          DTC_FILE=$(find . -name "dtc-lexer.lex.c_shipped")
-          sed -i 's/YYSTYPE yylval;//g' "$DTC_FILE"
+          # 1. DTC Fix: Remove the duplicate yylval definition
+          find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/YYSTYPE yylval;//g' {} +
 
-          # 2. HID Fix: Manual 'sed' instead of patch to avoid Hunk Failures
-          # This inserts the required line into f_hid.c precisely
-          HID_FILE=$(find . -name "f_hid.c")
-          sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' "$HID_FILE"
+          # 2. HID Fix: Inject the page size check into the HID gadget driver
+          # This version uses a simpler append to avoid 'sed' delimiter issues
+          find . -name "f_hid.c" -exec sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' {} +
           
-          echo "DTC and HID patches applied via sed."
+          echo "DTC and HID patches applied successfully."
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Simplified config call - MTK Makefiles usually handle the path internally
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_defconfig
+          # Force copy the defconfig to the root configs folder to avoid "Can't find" errors
+          DEFCONFIG_PATH=$(find . -name "ellis_defconfig" | head -n 1)
+          cp "$DEFCONFIG_PATH" arch/arm64/configs/ellis_nh_defconfig
+
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
@@ -70,13 +71,13 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # We add -k to keep going even if there's a non-critical driver warning
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/ || cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          # Catch any Image.gz or Image.gz-dtb
+          find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           zip -r ../Ellis-HID-Kernel.zip ./*
