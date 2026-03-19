@@ -33,7 +33,7 @@ jobs:
           mkdir -p build
           cp build/make/envsetup.sh build/envsetup.sh
           mkdir -p device/motorola/hawaii
-          echo "COMMON_LUNCH_CHOICES := ellis-eng" > device/motorola/hawaii/AndroidProducts.mk
+          echo "COMMON_LUNCH_CHOICES := ellis-eng" > device/motorola/ellis/AndroidProducts.mk
           cat <<EOF > device/motorola/hawaii/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_BOARD_PLATFORM := mt6765
