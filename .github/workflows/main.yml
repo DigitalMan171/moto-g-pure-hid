@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Project Aware V2
+name: Ellis Engineering Build - Symlink Bridge
 
 on:
   workflow_dispatch:
@@ -36,19 +36,27 @@ jobs:
           export CC=clang
           export HOSTCC=clang
           
-          # 2. TOOLCHAIN MAPPING
+          # 2. TOOLCHAIN MAPPING & SYMLINK FIX
+          # We create the 'missing' GNU-named files as links to our LLVM tools
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
+          
+          ln -sf $TOOLCHAIN_BIN/ld.lld $TOOLCHAIN_BIN/${CROSS_COMPILE}ld
+          ln -sf $TOOLCHAIN_BIN/llvm-ar $TOOLCHAIN_BIN/${CROSS_COMPILE}ar
+          ln -sf $TOOLCHAIN_BIN/llvm-objcopy $TOOLCHAIN_BIN/${CROSS_COMPILE}objcopy
+          ln -sf $TOOLCHAIN_BIN/llvm-nm $TOOLCHAIN_BIN/${CROSS_COMPILE}nm
+          ln -sf $TOOLCHAIN_BIN/clang $TOOLCHAIN_BIN/${CROSS_COMPILE}gcc
+          
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 3. INITIALIZE WITH COMPILER OVERRIDE
-          # We pass CC and CROSS_COMPILE here so Kconfig finds 'clang' instead of searching for '-gcc'
+          # 3. INITIALIZE WITH EXPLICIT ARGS
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                CROSS_COMPILE=$CROSS_COMPILE \
+               LD=ld.lld \
                mgk_64_k510_defconfig
 
           # 4. CONSTRUCT THE COMPOSITE CONFIG
@@ -67,19 +75,19 @@ jobs:
             --enable CONFIG_USB_PHY \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 6. SEAL THE CONFIG (olddefconfig)
+          # 6. SEAL THE CONFIG
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
                CROSS_COMPILE=$CROSS_COMPILE \
+               LD=ld.lld AR=llvm-ar NM=llvm-nm \
                olddefconfig
             
           # 7. FINAL COMPILE
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
+               CROSS_COMPILE=$CROSS_COMPILE \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
-               CROSS_COMPILE=$CROSS_COMPILE \
                Image.gz dtbs -j$(nproc)
 
       - name: Package Image.gz-dtb
@@ -93,7 +101,7 @@ jobs:
           fi
           
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Build Complete."
+          echo "Build Complete: Binary generated successfully."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
