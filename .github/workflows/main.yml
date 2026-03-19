@@ -44,7 +44,7 @@ jobs:
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
           # Using your verified path: ext_config/ellis (omitting .defconfig)
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis_defconfig
           
           # Enable HID Arsenal switches
           ./scripts/config --file out/.config \
