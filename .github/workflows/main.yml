@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Raw Toolchain
+name: Ellis Engineering Build - Clean Slate
 
 on:
   workflow_dispatch:
@@ -32,12 +32,11 @@ jobs:
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
           
-          # 2. TOOLCHAIN PATHS
+          # 2. TOOLCHAIN MAPPING
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           
-          # We only link the Linker and Binary tools. 
-          # DO NOT link 'gcc' to 'clang' - this triggers the android-llvm error.
+          # Symlink only the binary utilities, NOT gcc
           ln -sf $TOOLCHAIN_BIN/ld.lld $TOOLCHAIN_BIN/${CROSS_COMPILE}ld
           ln -sf $TOOLCHAIN_BIN/llvm-ar $TOOLCHAIN_BIN/${CROSS_COMPILE}ar
           ln -sf $TOOLCHAIN_BIN/llvm-objcopy $TOOLCHAIN_BIN/${CROSS_COMPILE}objcopy
@@ -47,17 +46,19 @@ jobs:
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 3. INITIALIZE (Explicitly using 'clang' as the command)
+          # 3. BASE CONFIG
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
                LLVM=1 LLVM_IAS=1 mgk_64_k510_defconfig
 
-          # 4. MERGE MOTOROLA FRAGMENT
+          # 4. MOTOROLA HARDWARE MERGE
+          # This fragment should resolve the "unmet dependencies" for cameras/wifi
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
             $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
 
-          # 5. INJECT HID & NATIVE STORAGE RESOLUTION
+          # 5. TARGET INJECTION (HID & Storage)
+          # We've removed the manual 'skips' - letting the system resolve naturally
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
@@ -65,20 +66,19 @@ jobs:
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_HID_GENERIC \
             --enable CONFIG_USB_GADGET \
-            --enable CONFIG_MMC \
-            --enable CONFIG_MTK_MSDC \
             --enable CONFIG_MMC_MTK \
+            --enable CONFIG_MTK_MSDC \
             --enable CONFIG_MTK_RPMB \
             --enable CONFIG_MTK_RPMB_SUPPORT \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 6. SEAL CONFIG (Force raw clang usage here)
+          # 6. SEALING THE CONFIG
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
                LLVM=1 LLVM_IAS=1 olddefconfig
             
-          # 7. FINAL COMPILE
+          # 7. THE COMPILE
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=clang HOSTCC=clang AS=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
@@ -90,7 +90,14 @@ jobs:
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
+          
+          if [ -z "$DTB_FILE" ]; then
+             echo "ERROR: DTB not found."
+             exit 1
+          fi
+          
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
+          echo "Package created successfully."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
