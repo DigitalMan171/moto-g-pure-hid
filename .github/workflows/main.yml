@@ -7,10 +7,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Kernel Source
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Checkout Motorola Source
         uses: actions/checkout@v4
         with:
-          # FORCING THE CORRECT MOTOROLA BRANCH
+          repository: 'MotorolaMobilityLLC/kernel-mtk'
           ref: 'android-12-release-s3rhs32.20-42-10-4-11'
           fetch-depth: 1
 
@@ -21,7 +29,6 @@ jobs:
 
       - name: Setup AOSP Clang
         run: |
-          # Fix for Ubuntu 24.04 ncurses dependency
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
           
@@ -66,7 +73,7 @@ jobs:
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Reference your exact file path now that we are on the right branch
+          # Now that we are on the Motorola branch, this path is valid
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis_defconfig
           
           ./scripts/config --file out/.config \
