@@ -1,8 +1,6 @@
-name: Ellis Engineering Build - Absolute Path Resolve
-
+name: Ellis Engineering Build - Path Correction
 on:
   workflow_dispatch:
-
 env:
   ARCH: arm64
   SUBARCH: arm64
@@ -11,7 +9,6 @@ env:
   CROSS_COMPILE_ARM32: arm-linux-androideabi-
   CC: clang
   HOSTCC: clang
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,97 +19,39 @@ jobs:
           repository: MotorolaMobilityLLC/kernel-mtk
           fetch-depth: 1
           path: kernel
-
       - name: Fetch Factory Toolchains
         run: |
-          # Clone into absolute paths to avoid 'cd' confusion
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b $GITHUB_WORKSPACE/clang-aosp
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 $GITHUB_WORKSPACE/gcc64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 $GITHUB_WORKSPACE/gcc32
-          
-          # Ensure binaries are executable
-          chmod +x $GITHUB_WORKSPACE/clang-aosp/bin/*
-          chmod +x $GITHUB_WORKSPACE/gcc64/bin/*
-          chmod +x $GITHUB_WORKSPACE/gcc32/bin/*
-
-          # Add to system PATH permanently for the duration of this job
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
           echo "$GITHUB_WORKSPACE/clang-aosp/bin" >> $GITHUB_PATH
           echo "$GITHUB_WORKSPACE/gcc64/bin" >> $GITHUB_PATH
           echo "$GITHUB_WORKSPACE/gcc32/bin" >> $GITHUB_PATH
-
-      - name: Setup Build Environment (Full Legacy Stack)
+      - name: Setup Build Environment
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev \
-            libc6:i386 libstdc++6:i386 lib32z1
-          
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev libc6:i386 libstdc++6:i386 lib32z1
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
-          
           sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
           sudo apt-get install -y -f
-
       - name: Build Engineering Stack
         run: |
-          # Verify toolchain is in the PATH now
-          echo "Testing Linker Path..."
-          which aarch64-linux-android-ld
-          aarch64-linux-android-ld --version
-          
           cd kernel
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
-          
-          # Initialize
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               CLANG_TRIPLE=$CLANG_TRIPLE \
-               CROSS_COMPILE=$CROSS_COMPILE \
-               CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
-               mgk_64_k510_defconfig
-
-          # Merge Motorola Fragments
-          ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
-            $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
-
-          # Inject HID and storage drivers
-          ./scripts/config --file $OUT_DIR/.config \
-            --enable CONFIG_MTK_ENG_BUILD \
-            --enable CONFIG_USB_G_HID \
-            --enable CONFIG_USB_CONFIGFS_F_HID \
-            --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_USB_GADGET \
-            --enable CONFIG_MTK_MSDC \
-            --enable CONFIG_MMC_MTK \
-            --enable CONFIG_MTK_RPMB \
-            --enable CONFIG_MTK_RPMB_SUPPORT \
-            --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
-            
-          # Final Config Check
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               CLANG_TRIPLE=$CLANG_TRIPLE \
-               CROSS_COMPILE=$CROSS_COMPILE \
-               CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
-               olddefconfig
-            
-          # Full Compile
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               CLANG_TRIPLE=$CLANG_TRIPLE \
-               CROSS_COMPILE=$CROSS_COMPILE \
-               CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
-               Image.gz dtbs -j$(nproc)
-
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 mgk_64_k510_defconfig
+          ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
+          ./scripts/config --file $OUT_DIR/.config --enable CONFIG_MTK_ENG_BUILD --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_USB_CONFIGFS --enable CONFIG_HID_GENERIC --enable CONFIG_USB_GADGET --enable CONFIG_MTK_MSDC --enable CONFIG_MMC_MTK --enable CONFIG_MTK_RPMB --enable CONFIG_MTK_RPMB_SUPPORT --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz dtbs -j$(nproc)
       - name: Package Image.gz-dtb
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
