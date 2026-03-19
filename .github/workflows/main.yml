@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Native MTK
+name: Ellis Engineering Build - Root Logic
 
 on:
   workflow_dispatch:
@@ -12,11 +12,11 @@ jobs:
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           fetch-depth: 1
-          path: kernel
+          path: kernel # Keeping it in a folder for organizational clarity
 
       - name: Fetch Legacy Clang (r416183b)
         run: |
-          # Fetching the stable AOSP Clang 12.0.5 for Android 12
+          # Download toolchain to a separate sibling folder
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Setup Build Environment
@@ -26,44 +26,44 @@ jobs:
 
       - name: Build Engineering Stack
         run: |
+          # 1. JUMP INTO THE SOURCE DRIVEWAY
           cd kernel
-          # Setup Toolchain Path
-          export PATH=$GITHUB_WORKSPACE/clang-aosp/bin:$PATH
+          
+          # 2. MAP THE TOOLCHAIN (Absolute Path)
+          # We use GITHUB_WORKSPACE so the path is valid even after the 'cd'
+          export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
+          export PATH=$TOOLCHAIN_BIN:$PATH
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
-          OUT_DIR=out
+          # 3. DEFINE OUTPUT
+          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
+          mkdir -p $OUT_DIR
           
-          # 1. Initialize Native Ellis Config
-          # Using LLVM tools (LD, AR, NM) to solve the 'linker not found' error
+          # 4. INITIALIZE CONFIG
+          # Since we are INSIDE 'kernel', the relative path 'arch/arm64/...' now works
           make O=$OUT_DIR ARCH=arm64 \
                CC=clang HOSTCC=gcc HOSTCXX=g++ \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
-               OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+               STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
-               ext_config/ellis_defconfig
-          
-          # 2. Inject Engineering/Factory Overrides
-          if [ -f arch/arm64/configs/factory-k62v1_32_bsp-ellis.config ]; then
-            ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/factory-k62v1_32_bsp-ellis.config
-          fi
-          
-          # 3. Enable Kali HID & Engineering Hardware Access
+               ellis_defconfig
+
+          # 5. INJECT ENGINEERING & HID NODES
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_MTK_SCHED_MONITOR \
-            --disable CONFIG_ANDROID_LOW_MEMORY_KILLER
+            --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 4. Compile Kernel and DTBs
+          # 6. FINAL COMPILE
           make O=$OUT_DIR ARCH=arm64 \
                CC=clang HOSTCC=gcc HOSTCXX=g++ \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
-               OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+               STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -71,18 +71,16 @@ jobs:
 
       - name: Package for Flashing
         run: |
-          cd kernel/out
-          # Find the specific MT6765 Ellis DTB
-          DTB_FILE=$(find arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
+          # Locate and Concatenate the Ellis DTB
+          OUT_DIR=${{ github.workspace }}/kernel/out
+          DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
           
           if [ -z "$DTB_FILE" ]; then
-             echo "Ellis DTB not found, falling back to MT6765 generic"
-             DTB_FILE=$(find arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
+             DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
           fi
           
-          # Final Concatenation: Kernel + Hardware Map
-          cat arch/arm64/boot/Image.gz "$DTB_FILE" > arch/arm64/boot/Image.gz-dtb
-          echo "Build Complete: Image.gz-dtb created."
+          cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
+          echo "Successfully merged Image.gz-dtb"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
