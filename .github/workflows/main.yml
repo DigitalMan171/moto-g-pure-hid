@@ -1,4 +1,4 @@
-name: Ellis Engineering Build
+name: Ellis Engineering Build - Native MTK
 
 on:
   workflow_dispatch:
@@ -14,17 +14,10 @@ jobs:
           fetch-depth: 1
           path: kernel
 
-      - name: Fetch Clang Toolchain (r416183b)
+      - name: Fetch Legacy Clang (r416183b)
         run: |
-          # Use HTTPS for reliability; this is the stable Android 12 legacy toolchain
+          # Fetching the stable AOSP Clang 12.0.5 for Android 12
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
-
-      - name: Sync Techpacks
-        run: |
-          cd kernel
-          mkdir -p techpack/display techpack/audio
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-display techpack/display
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-audio techpack/audio
 
       - name: Setup Build Environment
         run: |
@@ -34,81 +27,65 @@ jobs:
       - name: Build Engineering Stack
         run: |
           cd kernel
-          # Export the toolchain bin so 'clang' and 'ld.lld' are visible
+          # Setup Toolchain Path
           export PATH=$GITHUB_WORKSPACE/clang-aosp/bin:$PATH
-          
-          # Verification: Check if the linker exists to prevent 'not found' errors
-          ls $GITHUB_WORKSPACE/clang-aosp/bin/ld.lld
+          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
           OUT_DIR=out
           
-          # 1. Initialize Base Config
-          # We explicitly map LD and AR to the LLVM versions in our fetched toolchain
+          # 1. Initialize Native Ellis Config
+          # Using LLVM tools (LD, AR, NM) to solve the 'linker not found' error
           make O=$OUT_DIR ARCH=arm64 \
-               CC=clang \
-               HOSTCC=gcc \
-               HOSTCXX=g++ \
-               LD=ld.lld \
-               AR=llvm-ar \
-               NM=llvm-nm \
-               OBJCOPY=llvm-objcopy \
-               OBJDUMP=llvm-objdump \
-               STRIP=llvm-strip \
+               CC=clang HOSTCC=gcc HOSTCXX=g++ \
+               LD=ld.lld AR=llvm-ar NM=llvm-nm \
+               OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
-               /ext_config/ellis_defconfig
+               ellis_defconfig
           
           # 2. Inject Engineering/Factory Overrides
           if [ -f arch/arm64/configs/factory-k62v1_32_bsp-ellis.config ]; then
             ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/factory-k62v1_32_bsp-ellis.config
           fi
           
-          # 3. Force-Enable HID and Engineering logic for Kali/HID
+          # 3. Enable Kali HID & Engineering Hardware Access
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_HID_GENERIC
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_MTK_SCHED_MONITOR \
+            --disable CONFIG_ANDROID_LOW_MEMORY_KILLER
             
-          # 4. Finalize and Compile
-          # LD_LIBRARY_PATH ensures Clang finds its internal support libs
-          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
-          
+          # 4. Compile Kernel and DTBs
           make O=$OUT_DIR ARCH=arm64 \
-               CC=clang \
-               HOSTCC=gcc \
-               HOSTCXX=g++ \
-               LD=ld.lld \
-               AR=llvm-ar \
-               NM=llvm-nm \
-               OBJCOPY=llvm-objcopy \
-               OBJDUMP=llvm-objdump \
-               STRIP=llvm-strip \
+               CC=clang HOSTCC=gcc HOSTCXX=g++ \
+               LD=ld.lld AR=llvm-ar NM=llvm-nm \
+               OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
                Image.gz dtbs -j$(nproc)
 
-      - name: Package Image.gz-dtb
+      - name: Package for Flashing
         run: |
-          cd kernel
-          OUT_DIR=out
-          # Locate the Ellis DTB
-          DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
+          cd kernel/out
+          # Find the specific MT6765 Ellis DTB
+          DTB_FILE=$(find arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
           
           if [ -z "$DTB_FILE" ]; then
-             echo "Ellis DTB not found, searching MT6765..."
-             DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
+             echo "Ellis DTB not found, falling back to MT6765 generic"
+             DTB_FILE=$(find arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
           fi
           
-          # Manual concatenation for the legacy bootloader
-          cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Successfully created Image.gz-dtb"
+          # Final Concatenation: Kernel + Hardware Map
+          cat arch/arm64/boot/Image.gz "$DTB_FILE" > arch/arm64/boot/Image.gz-dtb
+          echo "Build Complete: Image.gz-dtb created."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-eng-kernel
+          name: ellis-hid-kernel
           path: kernel/out/arch/arm64/boot/Image.gz-dtb
