@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Makefile Sovereign
+name: Ellis Engineering Build - Silent Seal
 
 on:
   workflow_dispatch:
@@ -25,10 +25,9 @@ jobs:
 
       - name: Build Engineering Stack
         run: |
-          # 1. ENTER COMMAND CENTER
           cd kernel
           
-          # 2. EXPORT ENGINE VARIABLES
+          # 1. ENVIRONMENT
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -37,26 +36,30 @@ jobs:
           export CC=clang
           export HOSTCC=clang
           
-          # 3. TOOLCHAIN MAPPING
+          # 2. TOOLCHAIN MAPPING
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
-          # 4. DEFINE OUTPUT
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 5. INITIALIZE BASE CONFIG (The Makefile Target)
-          # We use the verified mgk_64_k510_defconfig found in the diagnostic
+          # 3. INITIALIZE BASE CONFIG
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
                mgk_64_k510_defconfig
 
-          # 6. INJECT HID & ENGINEERING NODES
-          # Modifying the .config directly using the kernel's own tools
+          # 4. FIX DEPENDENCIES & INJECT HID
+          # We enable the 'Parents' to stop the 'Restart config' interactive loop
           ./scripts/config --file $OUT_DIR/.config \
+            --enable CONFIG_NET \
+            --enable CONFIG_WIRELESS \
+            --enable CONFIG_MEDIA_SUPPORT \
+            --enable CONFIG_VIDEO_DEV \
+            --enable CONFIG_USB_GADGET \
+            --enable CONFIG_USB_PHY \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -64,15 +67,14 @@ jobs:
             --enable CONFIG_HID_GENERIC \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 7. SEAL THE CONFIG (olddefconfig)
-          # This forces the Makefile to resolve dependencies for your new HID nodes
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
+          # 5. THE SILENT SEAL
+          # 'yes ""' selects the default 'n' or 'y' for any new prompts to prevent hangs
+          yes "" | make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                olddefconfig
             
-          # 8. FINAL COMPILE
-          # Only standard targets (Image.gz and dtbs) are called here
+          # 6. FINAL COMPILE
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
@@ -82,16 +84,15 @@ jobs:
       - name: Package Image.gz-dtb
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
-          # Find the DTB and merge it with the kernel image
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
           
           if [ -z "$DTB_FILE" ]; then
-             echo "ERROR: DTB not found. Check build logs for dtbs compilation."
+             echo "ERROR: DTB not found. Check build logs for 'dtbs' step success."
              exit 1
           fi
           
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Build Complete: Image.gz-dtb generated."
+          echo "Packaging Complete."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
