@@ -10,17 +10,9 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          # This forces GitHub to pull submodules and the entire history
-          submodules: 'recursive'
-          fetch-depth: 0
-
-      - name: Debug - What is in here?
-        run: |
-          echo "Listing root directory:"
-          ls -F
-          echo "-----------------------"
-          echo "Searching for any Makefile:"
-          find . -name "Makefile" -maxdepth 4
+          # FORCING THE CORRECT MOTOROLA BRANCH
+          ref: 'android-12-release-s3rhs32.20-42-10-4-11'
+          fetch-depth: 1
 
       - name: Install Build Dependencies
         run: |
@@ -29,34 +21,18 @@ jobs:
 
       - name: Setup AOSP Clang
         run: |
+          # Fix for Ubuntu 24.04 ncurses dependency
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
-          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          
           mkdir -p $GITHUB_WORKSPACE/clang
           cd $GITHUB_WORKSPACE/clang
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz
 
-      - name: Set Root and Apply Fixes
+      - name: Apply HID & DTC Fixes
         run: |
-          # Robust search for the Kernel Root
-          # We look for the Makefile that contains 'KERNELRELEASE'
-          MAKE_PATH=$(find . -name "Makefile" -exec grep -l "KERNELRELEASE" {} + | head -n 1)
-          
-          if [ -z "$MAKE_PATH" ]; then
-            # Fallback to any Makefile if the specific grep fails
-            MAKE_PATH=$(find . -name "Makefile" | head -n 1)
-          fi
-
-          if [ -z "$MAKE_PATH" ]; then
-            echo "FATAL: No Makefile found in the entire repository!"
-            exit 1
-          fi
-
-          KERNEL_ROOT=$(dirname "$MAKE_PATH")
-          echo "KERNEL_ROOT=$KERNEL_ROOT" >> $GITHUB_ENV
-          cd "$KERNEL_ROOT"
-
-          # Hardcoded Fixes (No External Links)
+          # 1. DTC Fix (Hardcoded)
           cat <<EOF > dtc.patch
           --- a/scripts/dtc/dtc-lexer.lex.c_shipped
           +++ b/scripts/dtc/dtc-lexer.lex.c_shipped
@@ -69,6 +45,7 @@ jobs:
            int yyleng;
           EOF
 
+          # 2. HID Fix (Hardcoded)
           cat <<EOF > hid.patch
           --- a/drivers/usb/gadget/function/f_hid.c
           +++ b/drivers/usb/gadget/function/f_hid.c
@@ -82,24 +59,15 @@ jobs:
            		ret = -ENOSPC;
           EOF
 
-          patch -p1 < dtc.patch || echo "DTC patch skip"
-          patch -p1 < hid.patch || echo "HID patch skip"
+          patch -p1 < dtc.patch || echo "DTC patch already applied"
+          patch -p1 < hid.patch || echo "HID patch already applied"
 
       - name: Configure HID & Magic IDs
         run: |
-          cd ${{ env.KERNEL_ROOT }}
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Use find for the defconfig inside the detected root
-          CONF_PATH=$(find . -name "ellis_defconfig" | head -n 1)
-          if [ -z "$CONF_PATH" ]; then
-             echo "Listing files in arch/arm64/configs to help debug:"
-             ls -R arch/arm64/configs/
-             exit 1
-          fi
-
-          cp "$CONF_PATH" arch/arm64/configs/ellis_nh_defconfig
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
+          # Reference your exact file path now that we are on the right branch
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis_defconfig
           
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
@@ -109,6 +77,7 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
+          # Inject Motorola Magic IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -116,18 +85,16 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          cd ${{ env.KERNEL_ROOT }}
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
         run: |
-          cd ${{ env.KERNEL_ROOT }}
           git clone https://github.com/osm0sis/AnyKernel3.git
-          find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/ || cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          zip -r ../../Ellis-HID-Kernel.zip ./*
+          zip -r ../Ellis-HID-Kernel.zip ./*
 
       - name: Upload Flashable Kernel
         uses: actions/upload-artifact@v4
