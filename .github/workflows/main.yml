@@ -14,17 +14,19 @@ jobs:
 
       - name: Sync Kernel & Techpacks
         run: |
-          # 1. Main Kernel Source
+          # 1. Main Kernel Source (Keep the specific branch)
           git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
           
           # 2. Connectivity (Bluetooth/Wi-Fi/GPS)
-          # These folders are where the 'mtk_btag' and 'uevt' code lives
+          # Trying the 'master' branch as it is the default for these vendor modules
           mkdir -p techpack/connectivity
-          git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity
+          git clone --depth 1 https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity || \
+          git clone --depth 1 -b master https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity
           
           # 3. Motorola Modules (Touchscreen/Display/Audio)
           mkdir -p techpack/motorola
-          git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola
+          git clone --depth 1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola || \
+          git clone --depth 1 -b master https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola
 
       - name: Install Build Dependencies
         run: |
@@ -42,7 +44,6 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # Core patches for compilation and HID support
           find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/YYSTYPE yylval;//g' {} +
           find . -name "f_hid.c" -exec sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' {} +
           echo "DTC and HID code patches applied."
@@ -50,14 +51,11 @@ jobs:
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          
-          # Find and prepare the ellis_defconfig
           CONF_FILE=$(find arch/arm64/configs -iname "*ellis*defconfig*" | head -n 1)
           cp "$CONF_FILE" arch/arm64/configs/ellis_nh_defconfig
 
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
-          # Enable NetHunter HID Gadget
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -66,7 +64,6 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Motorola Identity Injection
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -75,7 +72,6 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # Note: The build system automatically detects the 'techpack' folders
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
