@@ -10,7 +10,17 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # This forces GitHub to pull submodules and the entire history
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Debug - What is in here?
+        run: |
+          echo "Listing root directory:"
+          ls -F
+          echo "-----------------------"
+          echo "Searching for any Makefile:"
+          find . -name "Makefile" -maxdepth 4
 
       - name: Install Build Dependencies
         run: |
@@ -26,15 +36,27 @@ jobs:
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz
 
-      - name: Detect Kernel Root and Apply Fixes
+      - name: Set Root and Apply Fixes
         run: |
-          # 1. Find where the Makefile actually is
-          KERNEL_ROOT=$(find . -name "Makefile" -exec grep -l "VERSION =" {} + | head -n 1 | xargs dirname)
-          echo "KERNEL_ROOT=$KERNEL_ROOT" >> $GITHUB_ENV
-          cd $KERNEL_ROOT
-          echo "Real Kernel Root is: $(pwd)"
+          # Robust search for the Kernel Root
+          # We look for the Makefile that contains 'KERNELRELEASE'
+          MAKE_PATH=$(find . -name "Makefile" -exec grep -l "KERNELRELEASE" {} + | head -n 1)
+          
+          if [ -z "$MAKE_PATH" ]; then
+            # Fallback to any Makefile if the specific grep fails
+            MAKE_PATH=$(find . -name "Makefile" | head -n 1)
+          fi
 
-          # 2. Create and Apply DTC Fix
+          if [ -z "$MAKE_PATH" ]; then
+            echo "FATAL: No Makefile found in the entire repository!"
+            exit 1
+          fi
+
+          KERNEL_ROOT=$(dirname "$MAKE_PATH")
+          echo "KERNEL_ROOT=$KERNEL_ROOT" >> $GITHUB_ENV
+          cd "$KERNEL_ROOT"
+
+          # Hardcoded Fixes (No External Links)
           cat <<EOF > dtc.patch
           --- a/scripts/dtc/dtc-lexer.lex.c_shipped
           +++ b/scripts/dtc/dtc-lexer.lex.c_shipped
@@ -47,7 +69,6 @@ jobs:
            int yyleng;
           EOF
 
-          # 3. Create and Apply HID Fix
           cat <<EOF > hid.patch
           --- a/drivers/usb/gadget/function/f_hid.c
           +++ b/drivers/usb/gadget/function/f_hid.c
@@ -69,10 +90,15 @@ jobs:
           cd ${{ env.KERNEL_ROOT }}
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Find the defconfig
+          # Use find for the defconfig inside the detected root
           CONF_PATH=$(find . -name "ellis_defconfig" | head -n 1)
+          if [ -z "$CONF_PATH" ]; then
+             echo "Listing files in arch/arm64/configs to help debug:"
+             ls -R arch/arm64/configs/
+             exit 1
+          fi
+
           cp "$CONF_PATH" arch/arm64/configs/ellis_nh_defconfig
-          
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
           ./scripts/config --file out/.config \
