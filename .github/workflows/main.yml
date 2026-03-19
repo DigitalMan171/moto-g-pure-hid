@@ -1,4 +1,4 @@
-name: Ellis NetHunter HID Build (Full Hardware)
+name: Ellis NetHunter HID Build (Full Source Fix)
 
 on:
   workflow_dispatch:
@@ -12,28 +12,20 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
 
-      - name: Sync Kernel & Techpacks
+      - name: Sync Source & Techpacks
         run: |
-          # 1. Main Kernel Source
+          # 1. Main Kernel
           git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
           
-          # 2. Connectivity (Bluetooth/Wi-Fi/GPS)
-          # We force clone to techpack/connectivity; if specific branch fails, we use master
+          # 2. Connectivity (Fixes the mtk_btag errors)
           mkdir -p techpack/connectivity
-          git clone --depth 1 https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity || \
-          git clone --depth 1 -b master https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity
+          git clone --depth 1 https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity
           
-          # 3. Motorola Modules (Touchscreen/Display)
+          # 3. Motorola Modules (Fixes Touchscreen/Audio errors)
           mkdir -p techpack/motorola
-          git clone --depth 1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola || \
-          git clone --depth 1 -b master https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola
+          git clone --depth 1 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev libncurses6 curl wget
-
-      - name: Setup AOSP Clang
+      - name: Setup Compiler (AOSP Clang)
         run: |
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
@@ -42,21 +34,16 @@ jobs:
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz
 
-      - name: Configure HID & Techpack Paths
+      - name: Configure and Link Techpacks
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Prepare the custom defconfig
+          # Use the ellis defconfig as base
           CONF_FILE=$(find arch/arm64/configs -iname "*ellis*defconfig*" | head -n 1)
           cp "$CONF_FILE" arch/arm64/configs/ellis_nh_defconfig
 
-          # Define Techpack paths for the Makefile
-          export KERNEL_SRC=$(pwd)
-          export techpack_path=$(pwd)/techpack
-          
+          # Standard NetHunter HID configuration
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
-          
-          # Unlock HID Gadget
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -65,30 +52,38 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Fix: Ensure the kernel looks for the techpacks we just downloaded
-          echo "CONFIG_MTK_CONN_PVM=y" >> out/.config
-          echo "CONFIG_MTK_CONN_MD=y" >> out/.config
+          # Apply IDs
+          sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
+          sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- olddefconfig
 
-      - name: Compile Kernel
+      - name: Compile with Manual Header Linking
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # We include the techpack directory in the header search path
+          
+          # THE SOURCE FIX:
+          # We force the compiler to include the techpack directories in its search path.
+          # This provides the 'mtk_btag' and 'touchscreen' definitions.
+          export KCFLAGS="-w \
+            -I$(pwd)/techpack/connectivity/include \
+            -I$(pwd)/techpack/motorola/include \
+            -I$(pwd)/drivers/misc/mediatek/include"
+          
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
           CROSS_COMPILE=aarch64-linux-android- \
-          KCFLAGS="-w -I$(pwd)/techpack/connectivity/include -I$(pwd)/techpack/motorola/include"
+          KCFLAGS="$KCFLAGS"
 
-      - name: Package & Upload
+      - name: Package Results
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
           find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          zip -r ../Ellis-Full-HID-Kernel.zip ./*
+          zip -r ../Ellis-Full-Source-Kernel.zip ./*
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Ellis-Full-Hardware-HID
-          path: Ellis-Full-HID-Kernel.zip
+          name: Ellis-Full-Source-Kernel
+          path: Ellis-Full-Source-Kernel.zip
