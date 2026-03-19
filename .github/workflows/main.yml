@@ -15,36 +15,41 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev libncurses6
+          sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev libncurses6 curl wget
 
       - name: Setup AOSP Clang & Fix Missing Libs
         run: |
-          # 1. Install libtinfo5 for Ubuntu 24.04 compatibility
+          # Install libtinfo5 for Ubuntu 24.04 compatibility
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
-          # 2. Download Clang r416183b via direct commit-hash archive
           mkdir clang
           cd clang
+          # Using the verified snapshot hash for Clang r416183b
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz
 
       - name: Apply Targeted NetHunter Fixes
         run: |
-          # DTC Fix: Prevents "multiple definition of yylloc"
-          curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch -o dtc.patch
-          patch -p1 < dtc.patch || echo "DTC patch already applied"
-
-          # HID Descriptor Fix
-          curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/add-hid-support.patch -o hid.patch
-          patch -p1 < hid.patch || echo "HID patch already present or failed"
+          # RAW links are required to avoid "Garbage found in patch" errors
+          curl -LSs "https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch" -o dtc.patch
+          curl -LSs "https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/add-hid-support.patch" -o hid.patch
+          
+          # Apply patches and ignore errors if already applied
+          patch -p1 < dtc.patch || echo "DTC patch skip"
+          patch -p1 < hid.patch || echo "HID patch skip"
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Using your verified path: ext_config/ellis (omitting .defconfig)
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis_defconfig
+          # --- THE FIX FOR 'NO RULE' ---
+          # We manually copy your special config to the root 'configs' folder 
+          # so 'make' can find it without complex path rules.
+          cp arch/arm64/configs/ext_config/ellis_defconfig arch/arm64/configs/ellis_nh_defconfig
+          
+          # Now we call it simply as 'ellis_nh_defconfig' (or just 'ellis_nh')
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
           # Enable HID Arsenal switches
           ./scripts/config --file out/.config \
@@ -55,11 +60,10 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Inject Magic USB IDs (Motorola Generic HID Mode)
+          # Inject Magic USB IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
-          # Refresh the config
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- olddefconfig
 
       - name: Compile Kernel
@@ -70,8 +74,8 @@ jobs:
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          # Ensure we grab the correct generated image from the 'out' folder
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ || cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          # Robust copy for the kernel image
+          find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           zip -r ../Ellis-HID-Kernel.zip ./*
