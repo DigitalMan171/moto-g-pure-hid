@@ -23,7 +23,7 @@ jobs:
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
-          # 2. Download Clang r416183b via a direct commit-hash archive (Fixes 400 error)
+          # 2. Download Clang r416183b via a direct commit-hash archive
           mkdir clang
           cd clang
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
@@ -31,12 +31,13 @@ jobs:
 
       - name: Apply Targeted NetHunter Fixes
         run: |
+          # We use the GitHub mirror of NetHunter patches to avoid GitLab's 404/Redirect issues
           # DTC Fix: Prevents "multiple definition of yylloc" errors
-          wget https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel/-/raw/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch
-          patch -p1 < fix-yylloc.dtc-lexer.lex.c_shipped.patch || echo "DTC patch already applied"
+          curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/fix-yylloc.dtc-lexer.lex.c_shipped.patch -o dtc.patch
+          patch -p1 < dtc.patch || echo "DTC patch already applied"
 
-          # HID Descriptor Fix: Targeted download to avoid WiFi driver crashes
-          wget https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel/-/raw/master/patches/4.19/add-hid-support.patch -O hid.patch
+          # HID Descriptor Fix: Allows high-accuracy mouse/keyboard support
+          curl -LSs https://raw.githubusercontent.com/TiagoSanti/kali-nethunter-kernel-builder/master/patches/4.19/add-hid-support.patch -o hid.patch
           patch -p1 < hid.patch || echo "HID patch already present or failed gracefully"
 
       - name: Configure HID & Magic IDs
@@ -55,7 +56,6 @@ jobs:
             --enable CONFIG_USB_CONFIGFS
             
           # Inject Magic USB IDs (Motorola Generic HID Mode)
-          # VID 0x22b8 (Motorola) PID 0x2e76 (Generic HID)
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -65,7 +65,7 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # Compile with warnings suppressed to avoid stopping on minor driver slop
+          # Compile with warnings suppressed
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
