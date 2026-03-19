@@ -1,6 +1,5 @@
-name: Motorola Ellis Factory Build v85
+name: Motorola Ellis Factory Build v86
 on: [workflow_dispatch]
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,94 +13,59 @@ jobs:
             kernel
             build
             external
-          key: ${{ runner.os }}-moto-ellis-v85
-
-      - name: 2. Sync Motorola-Standard Infrastructure
+          key: ${{ runner.os }}-moto-ellis-v86
+      - name: 2. Sync Comprehensive Infrastructure Block
         if: steps.cache-all.outputs.cache-hit != 'true'
         run: |
-          # CORE BUILD ENGINE
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build build/make
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/soong build/soong
           git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/build/blueprint build/blueprint
-          
-          # SOONG EXTERNAL DEPENDENCIES
           mkdir -p external
-          git clone --depth=1 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
-          
-          # MANDATORY PREBUILTS
+          git clone --depth=1 -b android-12.1.0_r27 https://android.googlesource.com/platform/external/golang-protobuf external/golang-protobuf
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/go/linux-x86 prebuilts/go/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/ninja/linux-x86 prebuilts/ninja/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/build-tools prebuilts/build-tools
-          
-          # KERNEL SOURCE
           git clone --depth=1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git kernel
-
-      - name: 3. Path Correction & Device Setup
+      - name: 3. Setup Legacy Pathing & Device Tree
         run: |
           export TOP=$(pwd)
-          # Physical copy to satisfy 'cat' operations from legacy MTK/Moto scripts
           mkdir -p build
           cp build/make/envsetup.sh build/envsetup.sh
-          
-          # Register Hawaii (Ellis) for Lunch
           mkdir -p device/motorola/hawaii
           echo "COMMON_LUNCH_CHOICES := full_hawaii-eng" > device/motorola/hawaii/AndroidProducts.mk
-          
           cat <<EOF > device/motorola/hawaii/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_BOARD_PLATFORM := mt6765
           TARGET_DEVICE := hawaii
           EOF
-          
           git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
-
-      - name: 4. Execution (Absolute GOROOT Protocol)
+      - name: 4. Execution Protocol
         run: |
           export TOP=$(pwd)
-          
-          # ABSOLUTE MAPPING: This prevents 'exit status 1' during Microfactory compilation
           export GOROOT=$TOP/prebuilts/go/linux-x86
           export PATH=$GOROOT/bin:$TOP/prebuilts/ninja/linux-x86:$TOP/prebuilts/build-tools/linux-x86/bin:$PATH
-          
-          # Source from the legacy path address to ensure environment stability
           source build/envsetup.sh
-          
-          # This triggers the Soong/Blueprint bootstrap using external/golang-protobuf
           lunch full_hawaii-eng
-          
-          # Select Clang Toolchain
           CLANG_DIR=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_DIR:$PATH"
-          
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          
-          # 1. Initialize Defconfig
           make $KBUILD_ARGS vendor/hawaii_defconfig
-          
-          # 2. Engineering & HID Injections
           ./scripts/config --file $TOP/out/.config --enable CONFIG_MACH_MT6765
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
           ./scripts/config --file $TOP/out/.config --disable CONFIG_STRICT_DEVMEM
           ./scripts/config --file $TOP/out/.config --enable CONFIG_DEVMEM
-          
-          # 3. Compile
           make $KBUILD_ARGS olddefconfig
           make $KBUILD_ARGS Image.gz
-
-          # 4. Final DTB Stitch
           truncate -s %4 $TOP/out/arch/arm64/boot/Image.gz
-          cat $TOP/out/arch/arm64/boot/Image.gz \
-          $TOP/dtb_repo/boot.img-dtb-offset \
-          $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
-
+          cat $TOP/out/arch/arm64/boot/Image.gz $TOP/dtb_repo/boot.img-dtb-offset $TOP/dtb_repo/boot.img-dtb > $TOP/out/arch/arm64/boot/Image.gz-dtb
       - name: 5. Archive Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: moto-g-pure-factory-v85
+          name: moto-g-pure-standard-v86
           path: |
             out/arch/arm64/boot/Image.gz-dtb
             out/.config
