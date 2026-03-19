@@ -33,11 +33,11 @@ jobs:
           mkdir -p build
           cp build/make/envsetup.sh build/envsetup.sh
           mkdir -p device/motorola/hawaii
-          echo "COMMON_LUNCH_CHOICES := full_hawaii-eng" > device/motorola/hawaii/AndroidProducts.mk
+          echo "COMMON_LUNCH_CHOICES := ellis-eng" > device/motorola/hawaii/AndroidProducts.mk
           cat <<EOF > device/motorola/hawaii/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_BOARD_PLATFORM := mt6765
-          TARGET_DEVICE := hawaii
+          TARGET_DEVICE := ellis
           EOF
           git clone https://${{ secrets.DTBTOKEN }}@github.com/digitalman171/ellis-dtb.git dtb_repo
       - name: 4. Execution Protocol
@@ -46,12 +46,12 @@ jobs:
           export GOROOT=$TOP/prebuilts/go/linux-x86
           export PATH=$GOROOT/bin:$TOP/prebuilts/ninja/linux-x86:$TOP/prebuilts/build-tools/linux-x86/bin:$PATH
           source build/envsetup.sh
-          lunch full_hawaii-eng
+          lunch ellis-eng
           CLANG_DIR=$(ls -d $TOP/prebuilts/clang/host/linux-x86/clang-r*/bin | sort -V | tail -n 1)
           export PATH="$CLANG_DIR:$PATH"
           cd kernel
           KBUILD_ARGS="-j$(nproc) O=$TOP/out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu-"
-          make $KBUILD_ARGS vendor/hawaii_defconfig
+          make $KBUILD_ARGS ext_config/ellis_defconfig
           ./scripts/config --file $TOP/out/.config --enable CONFIG_MACH_MT6765
           ./scripts/config --file $TOP/out/.config --enable CONFIG_USB_CONFIGFS_F_HID
           ./scripts/config --file $TOP/out/.config --enable CONFIG_UHID
