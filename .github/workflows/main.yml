@@ -11,62 +11,66 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
-          # Removing the specific 'ref' so it defaults to the main branch
-          # We will checkout the correct branch manually in the next step
-          fetch-depth: 0 
+          fetch-depth: 1 # Shallow clone to save time/space
           path: kernel
 
-      - name: Sync Ellis Branch and Techpacks
-        run: |
-          cd kernel
-          # Find the actual branch name for ellis on Android 12
-          ACTUAL_BRANCH=$(git branch -r | grep "ellis" | grep "android-12" | head -n 1 | sed 's/origin\///' | xargs)
-          echo "Found branch: $ACTUAL_BRANCH"
-          git checkout $ACTUAL_BRANCH
-
-          # Create techpack structure and sync
-          mkdir -p techpack/display techpack/audio
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-display techpack/display
-          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-audio techpack/audio
-
-      - name: Set up Build Environment
+      - name: Setup Build Tools & Toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev
-          # Link to AOSP Clang (Standard for Moto/MTK Android 12)
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 build-tools/clang
+          
+          # Increase Git buffers for large transfers
+          git config --global http.postBuffer 524288000
+          git config --global core.compression 0
+          
+          # Clone Proton Clang (Much more reliable than AOSP Clang for CI)
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang toolchain
+
+      - name: Sync Techpacks
+        run: |
+          cd kernel
+          mkdir -p techpack/display techpack/audio
+          # Using shallow clones for techpacks as well
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-display techpack/display
+          git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-audio techpack/audio
 
       - name: Build Engineering Stack
         run: |
           cd kernel
-          # Set up Toolchain Path
-          CLANG_BIN=$(pwd)/../build-tools/clang/clang-r416183b/bin
-          export PATH=$CLANG_BIN:$PATH
+          # Setup paths for Proton Clang
+          export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
           
           OUT_DIR=out
-          # 1. Initialize Base Config
-          make O=$OUT_DIR ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- ellis_defconfig
+          # Initialize Config
+          make O=$OUT_DIR ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang ellis_defconfig
           
-          # 2. Inject Engineering/Factory Overrides
-          # This specifically enables the "Eng" hardware logic you found
+          # Inject Engineering/Factory Overrides
           if [ -f arch/arm64/configs/factory-k62v1_32_bsp-ellis.config ]; then
             ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/factory-k62v1_32_bsp-ellis.config
           fi
           
-          # 3. Force-Enable HID and Kernel Monitors for your Controller
+          # Force-Enable HID and Engineering logic
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_MTK_SCHED_MONITOR \
-            --enable CONFIG_HID_GENERIC
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_MTK_SCHED_MONITOR
             
-          # 4. Compile
-          make O=$OUT_DIR ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
-          make O=$OUT_DIR ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- CLANG_TRIPLE=aarch64-linux-gnu- -j$(nproc)
+          # Compile using LLVM/Clang
+          make O=$OUT_DIR ARCH=arm64 \
+               CROSS_COMPILE=aarch64-linux-gnu- \
+               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               CC=clang \
+               AR=llvm-ar \
+               NM=llvm-nm \
+               OBJCOPY=llvm-objcopy \
+               OBJDUMP=llvm-objdump \
+               STRIP=llvm-strip \
+               -j$(nproc)
 
-      - name: Upload Finished Kernel
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ellis-eng-kernel
