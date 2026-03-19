@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Root Logic
+name: Ellis Engineering Build - Sealed Logic
 
 on:
   workflow_dispatch:
@@ -12,11 +12,10 @@ jobs:
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           fetch-depth: 1
-          path: kernel # Keeping it in a folder for organizational clarity
+          path: kernel
 
       - name: Fetch Legacy Clang (r416183b)
         run: |
-          # Download toolchain to a separate sibling folder
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Setup Build Environment
@@ -26,21 +25,19 @@ jobs:
 
       - name: Build Engineering Stack
         run: |
-          # 1. JUMP INTO THE SOURCE DRIVEWAY
+          # 1. Enter Source Directory
           cd kernel
           
-          # 2. MAP THE TOOLCHAIN (Absolute Path)
-          # We use GITHUB_WORKSPACE so the path is valid even after the 'cd'
+          # 2. Toolchain Mapping (Absolute)
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
-          # 3. DEFINE OUTPUT
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 4. INITIALIZE CONFIG
-          # Since we are INSIDE 'kernel', the relative path 'arch/arm64/...' now works
+          # 3. Initialize Base Config
+          # We use LLVM tools (LD, AR, NM) to handle legacy linker requirements
           make O=$OUT_DIR ARCH=arm64 \
                CC=clang HOSTCC=gcc HOSTCXX=g++ \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
@@ -48,9 +45,9 @@ jobs:
                CROSS_COMPILE=aarch64-linux-android- \
                CROSS_COMPILE_ARM32=arm-linux-androideabi- \
                CLANG_TRIPLE=aarch64-linux-gnu- \
-               ext_config/ellis_defconfig
+               ellis_defconfig
 
-          # 5. INJECT ENGINEERING & HID NODES
+          # 4. Inject Engineering & HID Nodes
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
@@ -59,7 +56,23 @@ jobs:
             --enable CONFIG_HID_GENERIC \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 6. FINAL COMPILE
+          # 5. SEAL THE CONFIG (olddefconfig)
+          # This resolves hidden dependencies for the HID gadgets
+          make O=$OUT_DIR ARCH=arm64 \
+               CC=clang HOSTCC=gcc HOSTCXX=g++ \
+               LD=ld.lld AR=llvm-ar NM=llvm-nm \
+               CROSS_COMPILE=aarch64-linux-android- \
+               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
+               olddefconfig
+
+          # 6. CONFIG AUDIT
+          # Verify that our HID settings survived the olddefconfig 'seal'
+          echo "--- HID CONFIG AUDIT ---"
+          grep -E "CONFIG_USB_G_HID|CONFIG_USB_CONFIGFS_F_HID|CONFIG_HID_GENERIC" $OUT_DIR/.config || echo "HID Flags Not Found!"
+          echo "------------------------"
+            
+          # 7. FINAL COMPILE
           make O=$OUT_DIR ARCH=arm64 \
                CC=clang HOSTCC=gcc HOSTCXX=g++ \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
@@ -69,9 +82,8 @@ jobs:
                CLANG_TRIPLE=aarch64-linux-gnu- \
                Image.gz dtbs -j$(nproc)
 
-      - name: Package for Flashing
+      - name: Package Image.gz-dtb
         run: |
-          # Locate and Concatenate the Ellis DTB
           OUT_DIR=${{ github.workspace }}/kernel/out
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
           
@@ -80,7 +92,7 @@ jobs:
           fi
           
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Successfully merged Image.gz-dtb"
+          echo "Build Finalized."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
