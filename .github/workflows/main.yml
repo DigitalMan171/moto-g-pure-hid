@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Native Resolution
+name: Ellis Engineering Build - Raw Toolchain
 
 on:
   workflow_dispatch:
@@ -27,35 +27,37 @@ jobs:
         run: |
           cd kernel
           
-          # 1. ENVIRONMENT & LEGACY SYMLINKS
+          # 1. ENVIRONMENT
           export ARCH=arm64
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
+          
+          # 2. TOOLCHAIN PATHS
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           
-          # Create the GNU-named aliases for the Kconfig sanity checks
+          # We only link the Linker and Binary tools. 
+          # DO NOT link 'gcc' to 'clang' - this triggers the android-llvm error.
           ln -sf $TOOLCHAIN_BIN/ld.lld $TOOLCHAIN_BIN/${CROSS_COMPILE}ld
           ln -sf $TOOLCHAIN_BIN/llvm-ar $TOOLCHAIN_BIN/${CROSS_COMPILE}ar
           ln -sf $TOOLCHAIN_BIN/llvm-objcopy $TOOLCHAIN_BIN/${CROSS_COMPILE}objcopy
           ln -sf $TOOLCHAIN_BIN/llvm-nm $TOOLCHAIN_BIN/${CROSS_COMPILE}nm
-          ln -sf $TOOLCHAIN_BIN/clang $TOOLCHAIN_BIN/${CROSS_COMPILE}gcc
           
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 2. INITIALIZE BASE MEDIA-TEK CONFIG
+          # 3. INITIALIZE (Explicitly using 'clang' as the command)
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=clang HOSTCC=clang CROSS_COMPILE=$CROSS_COMPILE \
+               CC=clang HOSTCC=clang \
+               CROSS_COMPILE=$CROSS_COMPILE \
                LLVM=1 LLVM_IAS=1 mgk_64_k510_defconfig
 
-          # 3. MERGE MOTOROLA PROJECT FRAGMENT
+          # 4. MERGE MOTOROLA FRAGMENT
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
             $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
 
-          # 4. ENABLE MASTER DRIVERS (The "Native" Resolution)
-          # We enable the MSDC/MMC stack to provide the mtk_mmc_host symbol naturally
+          # 5. INJECT HID & NATIVE STORAGE RESOLUTION
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
@@ -70,29 +72,25 @@ jobs:
             --enable CONFIG_MTK_RPMB_SUPPORT \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 5. SEAL THE CONFIG (olddefconfig)
+          # 6. SEAL CONFIG (Force raw clang usage here)
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=clang HOSTCC=clang CROSS_COMPILE=$CROSS_COMPILE \
+               CC=clang HOSTCC=clang \
+               CROSS_COMPILE=$CROSS_COMPILE \
                LLVM=1 LLVM_IAS=1 olddefconfig
             
-          # 6. FINAL COMPILE
+          # 7. FINAL COMPILE
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=clang HOSTCC=clang AS=clang CROSS_COMPILE=$CROSS_COMPILE \
-               LLVM=1 LLVM_IAS=1 STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
+               CC=clang HOSTCC=clang AS=clang \
+               CROSS_COMPILE=$CROSS_COMPILE \
+               LLVM=1 LLVM_IAS=1 \
+               STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
                Image.gz dtbs -j$(nproc)
 
       - name: Package Image.gz-dtb
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
-          
-          if [ -z "$DTB_FILE" ]; then
-             echo "ERROR: DTB not found."
-             exit 1
-          fi
-          
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Build Success: HID-enabled kernel generated."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
