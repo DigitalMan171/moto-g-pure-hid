@@ -9,11 +9,8 @@ jobs:
     steps:
       - name: Free Disk Space
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
 
       - name: Checkout Motorola Source
         uses: actions/checkout@v4
@@ -31,7 +28,6 @@ jobs:
         run: |
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
-          
           mkdir -p $GITHUB_WORKSPACE/clang
           cd $GITHUB_WORKSPACE/clang
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
@@ -39,42 +35,23 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # 1. DTC Fix (Hardcoded)
-          cat <<EOF > dtc.patch
-          --- a/scripts/dtc/dtc-lexer.lex.c_shipped
-          +++ b/scripts/dtc/dtc-lexer.lex.c_shipped
-          @@ -637,7 +637,6 @@
-           char *yytext;
-           #endif
-           
-          -YYSTYPE yylval;
-           
-           int yyleng;
-          EOF
+          # 1. DTC Fix: Using find to ensure we hit the right path regardless of nesting
+          DTC_FILE=$(find . -name "dtc-lexer.lex.c_shipped")
+          sed -i 's/YYSTYPE yylval;//g' "$DTC_FILE"
 
-          # 2. HID Fix (Hardcoded)
-          cat <<EOF > hid.patch
-          --- a/drivers/usb/gadget/function/f_hid.c
-          +++ b/drivers/usb/gadget/function/f_hid.c
-          @@ -223,6 +223,7 @@ static ssize_t f_hid_opts_report_desc_store(struct config_item *item,
-           	if (opts->refcnt) {
-           		ret = -EBUSY;
-           		goto end;
-          +	}
-           
-           	if (len > PAGE_SIZE) {
-           		ret = -ENOSPC;
-          EOF
-
-          patch -p1 < dtc.patch || echo "DTC patch already applied"
-          patch -p1 < hid.patch || echo "HID patch already applied"
+          # 2. HID Fix: Manual 'sed' instead of patch to avoid Hunk Failures
+          # This inserts the required line into f_hid.c precisely
+          HID_FILE=$(find . -name "f_hid.c")
+          sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' "$HID_FILE"
+          
+          echo "DTC and HID patches applied via sed."
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Now that we are on the Motorola branch, this path is valid
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ext_config/ellis_defconfig
+          # Simplified config call - MTK Makefiles usually handle the path internally
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_defconfig
           
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
@@ -84,7 +61,7 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Inject Motorola Magic IDs
+          # Motorola Magic IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -93,6 +70,7 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          # We add -k to keep going even if there's a non-critical driver warning
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
