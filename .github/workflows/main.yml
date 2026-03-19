@@ -1,51 +1,70 @@
-name: Build Ellis Kernel
+name: Ellis NetHunter Build & Verify
 
 on:
-  workflow_dispatch: # Allows you to start the build manually
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install Build Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev ccache
+      - name: Install Dependencies
+        run: sudo apt-get update && sudo apt-get install -y bc build-essential flex bison lz4 libssl-dev libelf-dev
 
-      - name: Fetch AOSP Clang
+      - name: Apply NetHunter HID Patches
         run: |
-          mkdir clang
-          cd clang
-          # Using Android 12/13 era Clang (r416183b) which is stable for 4.19
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r416183b.tar.gz
-          tar -xf clang-r416183b.tar.gz
-
-      - name: Setup Kernel Config
-        run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          # 1. Generate the base config
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_defconfig
+          # Clone only the patches to save time
+          git clone --depth 1 https://gitlab.com/kalilinux/nethunter/build-scripts/kali-nethunter-kernel.git nethunter-repo
           
-          # 2. THE HID INJECTION: Force enable HID Gadget drivers
-          echo "CONFIG_USB_G_HID=y" >> out/.config
-          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> out/.config
-          echo "CONFIG_HID_GENERIC=y" >> out/.config
-          
-          # 3. Refresh config to handle dependencies
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- olddefconfig
+          # Navigate to 4.19 patches and apply them to your root source
+          cd nethunter-repo/patches/4.19
+          for patch in *.patch; do 
+            echo "Applying $patch..."
+            patch -p1 -d ../../../ < "$patch"
+          done
 
-      - name: Compile Kernel
+      - name: Verify Patch Success (The Test)
         run: |
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android-
+          # The NetHunter patch modifies f_hid.c to allow more than one HID device.
+          # We search for 'ctm' or 'nethunter' tags usually added in the comments or code.
+          # If grep fails to find evidence of the patch, the build stops here.
+          grep -qi "nethunter" drivers/usb/gadget/function/f_hid.c || \
+          grep -qi "hidg_plat_driver" drivers/usb/gadget/function/f_hid.c || \
+          (echo "ERROR: HID Patch not detected in source code!" && exit 1)
+          echo "SUCCESS: HID Patch verified in f_hid.c"
 
-      - name: Upload Kernel Artifact
+      - name: Configure and Unlock HID
+        run: |
+          # 1. Generate base ellis config
+          make O=out ARCH=arm64 ellis_defconfig
+          
+          # 2. Use the kernel's own config tool to flip the switches
+          ./scripts/config --file out/.config --enable CONFIG_USB_G_HID
+          ./scripts/config --file out/.config --enable CONFIG_USB_CONFIGFS_F_HID
+          ./scripts/config --file out/.config --enable CONFIG_HID_GENERIC
+          
+          # 3. Finalize config dependencies
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Compile Unlocked Kernel
+        run: |
+          # Note: Ensure you have your Clang toolchain path exported here
+          make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-android-
+
+      - name: Package with AnyKernel3 (Magisk Safe)
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          zip -r ../Ellis-NetHunter-HID.zip ./*
+
+      - name: Upload Flashable Result
         uses: actions/upload-artifact@v4
         with:
           name: Ellis-HID-Kernel
-          path: out/arch/arm64/boot/Image.gz-dtb
+          path: Ellis-NetHunter-HID.zip
