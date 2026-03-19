@@ -32,9 +32,9 @@ jobs:
           export TOP=$(pwd)
           mkdir -p build
           cp build/make/envsetup.sh build/envsetup.sh
-          mkdir -p device/motorola/hawaii
+          mkdir -p device/motorola/ellis
           echo "COMMON_LUNCH_CHOICES := ellis-eng" > device/motorola/ellis/AndroidProducts.mk
-          cat <<EOF > device/motorola/hawaii/BoardConfig.mk
+          cat <<EOF > device/motorola/ellis/BoardConfig.mk
           TARGET_ARCH := arm64
           TARGET_BOARD_PLATFORM := mt6765
           TARGET_DEVICE := ellis
