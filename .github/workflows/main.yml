@@ -14,14 +14,10 @@ jobs:
           fetch-depth: 1
           path: kernel
 
-      - name: Setup Build Tools
+      - name: Fetch Clang Toolchain (r416183b)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-          
-          # Use a more compatible version of Proton Clang or standard AOSP Clang
-          git config --global http.postBuffer 524288000
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang toolchain
+          # Use HTTPS for reliability in CI
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
       - name: Sync Techpacks
         run: |
@@ -30,22 +26,29 @@ jobs:
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-display techpack/display
           git clone --depth=1 https://github.com/MotorolaMobilityLLC/kernel-msm-techpack-audio techpack/audio
 
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
       - name: Build Engineering Stack
         run: |
           cd kernel
-          # CRITICAL FIX: We add the toolchain to the path, 
-          # but we force the kernel to use the system's HOSTCC for build tools.
-          export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
+          # PATH ADJUSTMENT: Point to the 'bin' folder of the toolchain we just fetched
+          export CLANG_PATH=$GITHUB_WORKSPACE/clang-aosp/bin
+          export PATH=$CLANG_PATH:$PATH
           
           OUT_DIR=out
           
-          # 1. Initialize Config
+          # 1. Initialize Base Config
+          # Note: We use the system's GCC for HOSTCC to avoid the libc conflict from before
           make O=$OUT_DIR ARCH=arm64 \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                CC=clang \
                HOSTCC=gcc \
                HOSTCXX=g++ \
+               CROSS_COMPILE=aarch64-linux-android- \
+               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
                ellis_defconfig
           
           # 2. Inject Engineering/Factory Overrides
@@ -61,22 +64,34 @@ jobs:
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_HID_GENERIC
             
-          # 4. Compile
-          # We explicitly define LD_LIBRARY_PATH to avoid the 'libc' mismatch
-          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/toolchain/lib:$LD_LIBRARY_PATH
+          # 4. Finalize and Compile
+          # We use LD_LIBRARY_PATH to ensure the Clang binary finds its internal LLVM libs
+          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           
           make O=$OUT_DIR ARCH=arm64 \
-               CROSS_COMPILE=aarch64-linux-gnu- \
-               CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                CC=clang \
                HOSTCC=gcc \
                HOSTCXX=g++ \
-               AR=llvm-ar \
-               NM=llvm-nm \
-               OBJCOPY=llvm-objcopy \
-               OBJDUMP=llvm-objdump \
-               STRIP=llvm-strip \
-               -j$(nproc)
+               CROSS_COMPILE=aarch64-linux-android- \
+               CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+               CLANG_TRIPLE=aarch64-linux-gnu- \
+               Image.gz dtbs -j$(nproc)
+
+      - name: Package Image.gz-dtb
+        run: |
+          cd kernel
+          OUT_DIR=out
+          # Find the Ellis-specific DTB generated during the build
+          DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
+          
+          if [ -z "$DTB_FILE" ]; then
+             echo "Ellis DTB not found, falling back to MT6765..."
+             DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
+          fi
+          
+          # Concatenate the kernel and the DTB
+          cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
+          echo "Created Image.gz-dtb with $DTB_FILE"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
