@@ -35,32 +35,37 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # Core patches required for compilation and HID functionality
+          # DTC Fix: Duplicate yylval
           find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/YYSTYPE yylval;//g' {} +
+          # HID Fix: Page size check
           find . -name "f_hid.c" -exec sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' {} +
-          echo "DTC and HID patches applied."
+          echo "DTC and HID code patches applied."
 
       - name: Configure HID & Magic IDs
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Locate and prepare the defconfig
+          # Find and prepare the defconfig
           CONF_FILE=$(find arch/arm64/configs -iname "*ellis*defconfig*" | head -n 1)
           cp "$CONF_FILE" arch/arm64/configs/ellis_nh_defconfig
 
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
-          # The "Unlock" - Forcing the specific HID Gadget drivers
+          # 1. THE UNLOCK: Enable HID Gadget functions
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_F_HID \
             --enable CONFIG_HID_GENERIC \
             --enable CONFIG_USB_LIBCOMPOSITE \
-            --enable CONFIG_USB_CONFIGFS \
-            --disable CONFIG_MTK_HID_LEGACY # Disabling possible vendor conflicts
+            --enable CONFIG_USB_CONFIGFS
             
-          # Inject Magic IDs for Motorola identity
+          # 2. THE FIX: Disable the broken MediaTek Bluetooth Tag module causing the error
+          ./scripts/config --file out/.config \
+            --disable CONFIG_MTK_BT_TAG \
+            --disable CONFIG_MTK_BT_TAG_SUPPORT
+            
+          # 3. IDENTITY: Inject Motorola Magic IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -71,7 +76,7 @@ jobs:
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
-      - name: Package & Upload
+      - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
           find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
