@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Clean Slate
+name: Ellis Engineering Build - Source Neutral
 
 on:
   workflow_dispatch:
@@ -36,7 +36,8 @@ jobs:
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           
-          # Symlink only the binary utilities, NOT gcc
+          # Link only the required LLVM utilities. 
+          # We are NOT creating a 'gcc' symlink to avoid the android-llvm wrapper error.
           ln -sf $TOOLCHAIN_BIN/ld.lld $TOOLCHAIN_BIN/${CROSS_COMPILE}ld
           ln -sf $TOOLCHAIN_BIN/llvm-ar $TOOLCHAIN_BIN/${CROSS_COMPILE}ar
           ln -sf $TOOLCHAIN_BIN/llvm-objcopy $TOOLCHAIN_BIN/${CROSS_COMPILE}objcopy
@@ -46,19 +47,19 @@ jobs:
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 3. BASE CONFIG
+          # 3. INITIALIZE WITH EXPLICIT CLANG
+          # Passing CC=clang here forces the Kconfig scripts to use Clang directly.
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
                LLVM=1 LLVM_IAS=1 mgk_64_k510_defconfig
 
           # 4. MOTOROLA HARDWARE MERGE
-          # This fragment should resolve the "unmet dependencies" for cameras/wifi
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
             $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
 
-          # 5. TARGET INJECTION (HID & Storage)
-          # We've removed the manual 'skips' - letting the system resolve naturally
+          # 5. TARGET INJECTION
+          # Enabling the specific HID and Storage drivers needed for your project.
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
@@ -66,13 +67,14 @@ jobs:
             --enable CONFIG_USB_CONFIGFS \
             --enable CONFIG_HID_GENERIC \
             --enable CONFIG_USB_GADGET \
-            --enable CONFIG_MMC_MTK \
             --enable CONFIG_MTK_MSDC \
+            --enable CONFIG_MMC_MTK \
             --enable CONFIG_MTK_RPMB \
             --enable CONFIG_MTK_RPMB_SUPPORT \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 6. SEALING THE CONFIG
+          # 6. SEAL THE CONFIG (olddefconfig)
+          # This will resolve unmet dependencies using the defaults without pausing.
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
@@ -97,7 +99,6 @@ jobs:
           fi
           
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Package created successfully."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
