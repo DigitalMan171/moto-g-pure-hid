@@ -1,10 +1,10 @@
-name: Ellis Engineering Build - Refined V3
+name: Ellis Directory Diagnostic
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Kernel Source
@@ -14,82 +14,31 @@ jobs:
           fetch-depth: 1
           path: kernel
 
-      - name: Fetch Legacy Clang (r416183b)
+      - name: Print Directory Structure
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
-
-      - name: Setup Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev
-
-      - name: Build Engineering Stack
-        run: |
+          echo "--- STARTING DIRECTORY DIAGNOSTIC ---"
           cd kernel
           
-          # 1. DEFINE THE ENVIRONMENT
+          echo "Checking arch/arm64/configs contents:"
+          # We use -R to see if there are vendor subdirectories
+          ls -R arch/arm64/configs/
+          
+          echo "--- SEARCHING FOR ELLIS_DEFCONFIG ---"
+          find . -name "ellis_defconfig"
+          
+          echo "--- CHECKING ENVIRONMENT ---"
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-          export CC=clang
-          export HOSTCC=clang
+          echo "ARCH: $ARCH"
+          echo "CROSS_COMPILE: $CROSS_COMPILE"
           
-          # 2. TOOLCHAIN PATHS
-          export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
-          export PATH=$TOOLCHAIN_BIN:$PATH
-          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
-          
-          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
-          mkdir -p $OUT_DIR
-          
-          # 3. INITIALIZE CONFIG
-          # Passing variables as arguments ensures 'make' doesn't confuse them with targets
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
-               STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
-               ellis_defconfig
-
-          # 4. INJECT HID & ENGINEERING NODES
-          ./scripts/config --file $OUT_DIR/.config \
-            --enable CONFIG_MTK_ENG_BUILD \
-            --enable CONFIG_USB_G_HID \
-            --enable CONFIG_USB_CONFIGFS_F_HID \
-            --enable CONFIG_USB_CONFIGFS \
-            --enable CONFIG_HID_GENERIC \
-            --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
-            
-          # 5. SEAL CONFIG (olddefconfig)
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
-               olddefconfig
-            
-          # 6. FINAL COMPILE
-          # 'Image.gz' and 'dtbs' are the only targets here
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
-               STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
-               Image.gz dtbs -j$(nproc)
-
-      - name: Package Image.gz-dtb
-        run: |
-          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
-          # Find the DTB and merge it with the kernel image
-          DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
-          
-          if [ -z "$DTB_FILE" ]; then
-             DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
+          echo "--- VERIFYING KCONFIG ROOT ---"
+          if [ -f "Kconfig" ]; then
+            head -n 20 Kconfig
+          else
+            echo "Kconfig not found in root!"
           fi
           
-          cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Build Complete: Image.gz-dtb ready for download."
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ellis-hid-kernel
-          path: kernel/out/arch/arm64/boot/Image.gz-dtb
+          echo "--- DIAGNOSTIC COMPLETE ---"
