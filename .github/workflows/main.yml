@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Pure Android Stack
+name: Ellis Engineering Build - Refined V3
 
 on:
   workflow_dispatch:
@@ -15,8 +15,6 @@ jobs:
           path: kernel
 
       - name: Fetch Legacy Clang (r416183b)
-          # This is the official Android 12 legacy toolchain containing 
-          # the Clang compiler and the LLVM-based binutils.
         run: |
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
 
@@ -29,7 +27,7 @@ jobs:
         run: |
           cd kernel
           
-          # 1. SET ANDROID-SPECIFIC ENVIRONMENT
+          # 1. DEFINE THE ENVIRONMENT
           export ARCH=arm64
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -38,7 +36,7 @@ jobs:
           export CC=clang
           export HOSTCC=clang
           
-          # 2. MAP THE PATHS
+          # 2. TOOLCHAIN PATHS
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
@@ -47,8 +45,8 @@ jobs:
           mkdir -p $OUT_DIR
           
           # 3. INITIALIZE CONFIG
-          # We explicitly map the LLVM binutils to replace the missing GNU versions
-          make O=$OUT_DIR $ARCH $SUBARCH \
+          # Passing variables as arguments ensures 'make' doesn't confuse them with targets
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
@@ -64,14 +62,14 @@ jobs:
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
           # 5. SEAL CONFIG (olddefconfig)
-          make O=$OUT_DIR $ARCH $SUBARCH \
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                olddefconfig
             
           # 6. FINAL COMPILE
-          # The -j$(nproc) uses all available VM cores for the fastest possible build
-          make O=$OUT_DIR $ARCH $SUBARCH \
+          # 'Image.gz' and 'dtbs' are the only targets here
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                LD=ld.lld AR=llvm-ar NM=llvm-nm \
                STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
@@ -79,8 +77,8 @@ jobs:
 
       - name: Package Image.gz-dtb
         run: |
-          OUT_DIR=${{ github.workspace }}/kernel/out
-          # Concatenate the compressed kernel with the Ellis hardware description
+          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
+          # Find the DTB and merge it with the kernel image
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*ellis*.dtb" | head -n 1)
           
           if [ -z "$DTB_FILE" ]; then
@@ -88,7 +86,7 @@ jobs:
           fi
           
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          echo "Packaging Successful: Image.gz-dtb generated."
+          echo "Build Complete: Image.gz-dtb ready for download."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
