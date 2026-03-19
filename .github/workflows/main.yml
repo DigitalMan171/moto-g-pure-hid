@@ -1,12 +1,10 @@
-name: Ellis Engineering Build - Path Correction
+name: Ellis Engineering Build - Absolute Zero
 on:
   workflow_dispatch:
 env:
   ARCH: arm64
   SUBARCH: arm64
   CLANG_TRIPLE: aarch64-linux-gnu-
-  CROSS_COMPILE: aarch64-linux-android-
-  CROSS_COMPILE_ARM32: arm-linux-androideabi-
   CC: clang
   HOSTCC: clang
 jobs:
@@ -24,9 +22,6 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
-          echo "$GITHUB_WORKSPACE/clang-aosp/bin" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/gcc64/bin" >> $GITHUB_PATH
-          echo "$GITHUB_WORKSPACE/gcc32/bin" >> $GITHUB_PATH
       - name: Setup Build Environment
         run: |
           sudo dpkg --add-architecture i386
@@ -38,15 +33,27 @@ jobs:
           sudo apt-get install -y -f
       - name: Build Engineering Stack
         run: |
+          # Define absolute prefixes
+          GCC64_PREFIX=$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-
+          GCC32_PREFIX=$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-
+          CLANG_BIN=$GITHUB_WORKSPACE/clang-aosp/bin/
+          
+          # Verify the tool actually works before we start
+          echo "Verifying Linker at $GCC64_PREFIX"
+          ${GCC64_PREFIX}ld --version
+          
           cd kernel
+          export PATH=$CLANG_BIN:$PATH
           export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 mgk_64_k510_defconfig
+          
+          # Pass the full absolute prefix to CROSS_COMPILE
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX mgk_64_k510_defconfig
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
           ./scripts/config --file $OUT_DIR/.config --enable CONFIG_MTK_ENG_BUILD --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID --enable CONFIG_USB_CONFIGFS --enable CONFIG_HID_GENERIC --enable CONFIG_USB_GADGET --enable CONFIG_MTK_MSDC --enable CONFIG_MMC_MTK --enable CONFIG_MTK_RPMB --enable CONFIG_MTK_RPMB_SUPPORT --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 olddefconfig
-          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 Image.gz dtbs -j$(nproc)
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX olddefconfig
+          make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH CC=$CC HOSTCC=$HOSTCC CLANG_TRIPLE=$CLANG_TRIPLE CROSS_COMPILE=$GCC64_PREFIX CROSS_COMPILE_ARM32=$GCC32_PREFIX Image.gz dtbs -j$(nproc)
       - name: Package Image.gz-dtb
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
