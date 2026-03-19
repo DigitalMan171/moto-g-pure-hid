@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Chain Link Fix
+name: Ellis Engineering Build - Absolute Path Resolve
 
 on:
   workflow_dispatch:
@@ -25,9 +25,20 @@ jobs:
 
       - name: Fetch Factory Toolchains
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b clang-aosp
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 gcc64
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 gcc32
+          # Clone into absolute paths to avoid 'cd' confusion
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b $GITHUB_WORKSPACE/clang-aosp
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 $GITHUB_WORKSPACE/gcc64
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 $GITHUB_WORKSPACE/gcc32
+          
+          # Ensure binaries are executable
+          chmod +x $GITHUB_WORKSPACE/clang-aosp/bin/*
+          chmod +x $GITHUB_WORKSPACE/gcc64/bin/*
+          chmod +x $GITHUB_WORKSPACE/gcc32/bin/*
+
+          # Add to system PATH permanently for the duration of this job
+          echo "$GITHUB_WORKSPACE/clang-aosp/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/gcc64/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/gcc32/bin" >> $GITHUB_PATH
 
       - name: Setup Build Environment (Full Legacy Stack)
         run: |
@@ -36,34 +47,25 @@ jobs:
           sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev libelf-dev \
             libc6:i386 libstdc++6:i386 lib32z1
           
-          # 1. Fetch both dependent legacy libraries
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
           
-          # 2. Install them simultaneously so dpkg can resolve the internal dependency
           sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
-          
-          # 3. Force fix any remaining broken dependencies
           sudo apt-get install -y -f
 
       - name: Build Engineering Stack
         run: |
-          cd kernel
-          
-          # 1. PATHS
-          TOOLCHAIN_DIR=$GITHUB_WORKSPACE
-          export PATH=$TOOLCHAIN_DIR/clang-aosp/bin:$TOOLCHAIN_DIR/gcc64/bin:$TOOLCHAIN_DIR/gcc32/bin:$PATH
-          export LD_LIBRARY_PATH=$TOOLCHAIN_DIR/clang-aosp/lib64:$LD_LIBRARY_PATH
-          
-          # 2. VERIFY (The Linker Test)
-          # If this step passes, your environment is officially 'Factory Grade'
-          echo "Testing GCC 4.9 Linker Execution..."
+          # Verify toolchain is in the PATH now
+          echo "Testing Linker Path..."
+          which aarch64-linux-android-ld
           aarch64-linux-android-ld --version
           
+          cd kernel
+          export LD_LIBRARY_PATH=$GITHUB_WORKSPACE/clang-aosp/lib64:$LD_LIBRARY_PATH
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 3. INITIALIZE
+          # Initialize
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                CLANG_TRIPLE=$CLANG_TRIPLE \
@@ -71,11 +73,11 @@ jobs:
                CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
                mgk_64_k510_defconfig
 
-          # 4. MERGE
+          # Merge Motorola Fragments
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR \
             $OUT_DIR/.config arch/arm64/configs/ext_config/moto-mgk_64_k510.config
 
-          # 5. INJECT HID & STORAGE
+          # Inject HID and storage drivers
           ./scripts/config --file $OUT_DIR/.config \
             --enable CONFIG_MTK_ENG_BUILD \
             --enable CONFIG_USB_G_HID \
@@ -89,7 +91,7 @@ jobs:
             --enable CONFIG_MTK_RPMB_SUPPORT \
             --disable CONFIG_SECTION_MISMATCH_WARN_ONLY
             
-          # 6. SEAL & COMPILE
+          # Final Config Check
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                CLANG_TRIPLE=$CLANG_TRIPLE \
@@ -97,6 +99,7 @@ jobs:
                CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 \
                olddefconfig
             
+          # Full Compile
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
                CC=$CC HOSTCC=$HOSTCC \
                CLANG_TRIPLE=$CLANG_TRIPLE \
