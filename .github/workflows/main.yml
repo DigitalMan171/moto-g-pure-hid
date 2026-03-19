@@ -19,18 +19,22 @@ jobs:
 
       - name: Setup AOSP Clang
         run: |
-          # Fix for Ubuntu 24.04
           wget http://azure.archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
           sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
-
-          mkdir clang
-          cd clang
+          mkdir -p $GITHUB_WORKSPACE/clang
+          cd $GITHUB_WORKSPACE/clang
           curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/3857008389202edac32d57008bb8c99d2c957f9d/clang-r416183b.tar.gz
           tar -xf clang-r416183b.tar.gz
 
-      - name: Apply HID & DTC Fixes (Hardcoded)
+      - name: Detect Kernel Root and Apply Fixes
         run: |
-          # 1. DTC Fix: Prevents "multiple definition of yylloc"
+          # 1. Find where the Makefile actually is
+          KERNEL_ROOT=$(find . -name "Makefile" -exec grep -l "VERSION =" {} + | head -n 1 | xargs dirname)
+          echo "KERNEL_ROOT=$KERNEL_ROOT" >> $GITHUB_ENV
+          cd $KERNEL_ROOT
+          echo "Real Kernel Root is: $(pwd)"
+
+          # 2. Create and Apply DTC Fix
           cat <<EOF > dtc.patch
           --- a/scripts/dtc/dtc-lexer.lex.c_shipped
           +++ b/scripts/dtc/dtc-lexer.lex.c_shipped
@@ -43,7 +47,7 @@ jobs:
            int yyleng;
           EOF
 
-          # 2. HID Fix: Unlocks the report descriptor
+          # 3. Create and Apply HID Fix
           cat <<EOF > hid.patch
           --- a/drivers/usb/gadget/function/f_hid.c
           +++ b/drivers/usb/gadget/function/f_hid.c
@@ -62,18 +66,11 @@ jobs:
 
       - name: Configure HID & Magic IDs
         run: |
+          cd ${{ env.KERNEL_ROOT }}
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Find the config. If it's in a subfolder, this find command catches it.
+          # Find the defconfig
           CONF_PATH=$(find . -name "ellis_defconfig" | head -n 1)
-          
-          if [ -z "$CONF_PATH" ]; then
-            echo "Searching for any MediaTek defconfigs..."
-            find . -name "*defconfig"
-            exit 1
-          fi
-
-          echo "Found config at: $CONF_PATH"
           cp "$CONF_PATH" arch/arm64/configs/ellis_nh_defconfig
           
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
@@ -86,7 +83,6 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # Inject Magic USB IDs
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -94,16 +90,18 @@ jobs:
 
       - name: Compile Kernel
         run: |
+          cd ${{ env.KERNEL_ROOT }}
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
         run: |
+          cd ${{ env.KERNEL_ROOT }}
           git clone https://github.com/osm0sis/AnyKernel3.git
           find out/arch/arm64/boot/ -name "Image.gz*" -exec cp {} AnyKernel3/ \;
           cd AnyKernel3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          zip -r ../Ellis-HID-Kernel.zip ./*
+          zip -r ../../Ellis-HID-Kernel.zip ./*
 
       - name: Upload Flashable Kernel
         uses: actions/upload-artifact@v4
