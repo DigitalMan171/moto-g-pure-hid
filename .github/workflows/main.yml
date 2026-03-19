@@ -1,4 +1,4 @@
-name: Ellis Engineering Build - Symlink Bridge
+name: Ellis Engineering Build - Integrated LLVM
 
 on:
   workflow_dispatch:
@@ -33,14 +33,12 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-          export CC=clang
-          export HOSTCC=clang
           
-          # 2. TOOLCHAIN MAPPING & SYMLINK FIX
-          # We create the 'missing' GNU-named files as links to our LLVM tools
+          # 2. TOOLCHAIN PATHS
           export TOOLCHAIN_BIN=$GITHUB_WORKSPACE/clang-aosp/bin
           export PATH=$TOOLCHAIN_BIN:$PATH
           
+          # Create symlinks to ensure legacy scripts find the right tools
           ln -sf $TOOLCHAIN_BIN/ld.lld $TOOLCHAIN_BIN/${CROSS_COMPILE}ld
           ln -sf $TOOLCHAIN_BIN/llvm-ar $TOOLCHAIN_BIN/${CROSS_COMPILE}ar
           ln -sf $TOOLCHAIN_BIN/llvm-objcopy $TOOLCHAIN_BIN/${CROSS_COMPILE}objcopy
@@ -52,11 +50,12 @@ jobs:
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT_DIR
           
-          # 3. INITIALIZE WITH EXPLICIT ARGS
+          # 3. INITIALIZE WITH FULL LLVM STACK
+          # We add LLVM=1 and LLVM_IAS=1 to force the use of the integrated assembler
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
+               CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
-               LD=ld.lld \
+               LLVM=1 LLVM_IAS=1 \
                mgk_64_k510_defconfig
 
           # 4. CONSTRUCT THE COMPOSITE CONFIG
@@ -77,16 +76,18 @@ jobs:
             
           # 6. SEAL THE CONFIG
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
+               CC=clang HOSTCC=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
+               LLVM=1 LLVM_IAS=1 \
                olddefconfig
             
           # 7. FINAL COMPILE
+          # We explicitly set AS=clang to prevent the '-EL' error
           make O=$OUT_DIR ARCH=$ARCH SUBARCH=$SUBARCH \
-               CC=$CC HOSTCC=$HOSTCC \
+               CC=clang HOSTCC=clang \
+               AS=clang \
                CROSS_COMPILE=$CROSS_COMPILE \
-               LD=ld.lld AR=llvm-ar NM=llvm-nm \
+               LLVM=1 LLVM_IAS=1 \
                STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump \
                Image.gz dtbs -j$(nproc)
 
