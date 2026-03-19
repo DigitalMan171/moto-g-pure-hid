@@ -1,4 +1,4 @@
-name: Ellis NetHunter HID Build
+name: Ellis NetHunter HID Build (Full Hardware)
 
 on:
   workflow_dispatch:
@@ -12,12 +12,19 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
 
-      - name: Checkout Motorola Source
-        uses: actions/checkout@v4
-        with:
-          repository: 'MotorolaMobilityLLC/kernel-mtk'
-          ref: 'android-12-release-s3rhs32.20-42-10-4-11'
-          fetch-depth: 1
+      - name: Sync Kernel & Techpacks
+        run: |
+          # 1. Main Kernel Source
+          git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/kernel-mtk.git .
+          
+          # 2. Connectivity (Bluetooth/Wi-Fi/GPS)
+          # These folders are where the 'mtk_btag' and 'uevt' code lives
+          mkdir -p techpack/connectivity
+          git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectivity-conninfra.git techpack/connectivity
+          
+          # 3. Motorola Modules (Touchscreen/Display/Audio)
+          mkdir -p techpack/motorola
+          git clone --depth 1 -b android-12-release-s3rhs32.20-42-10-4-11 https://github.com/MotorolaMobilityLLC/motorola-kernel-modules.git techpack/motorola
 
       - name: Install Build Dependencies
         run: |
@@ -35,9 +42,8 @@ jobs:
 
       - name: Apply HID & DTC Fixes
         run: |
-          # DTC Fix: Duplicate yylval
+          # Core patches for compilation and HID support
           find . -name "dtc-lexer.lex.c_shipped" -exec sed -i 's/YYSTYPE yylval;//g' {} +
-          # HID Fix: Page size check
           find . -name "f_hid.c" -exec sed -i '/if (opts->refcnt) {/,/}/ s/}/}\n\n\tif (len > PAGE_SIZE) { ret = -ENOSPC; goto end; }/' {} +
           echo "DTC and HID code patches applied."
 
@@ -45,13 +51,13 @@ jobs:
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
-          # Find and prepare the defconfig
+          # Find and prepare the ellis_defconfig
           CONF_FILE=$(find arch/arm64/configs -iname "*ellis*defconfig*" | head -n 1)
           cp "$CONF_FILE" arch/arm64/configs/ellis_nh_defconfig
 
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- ellis_nh_defconfig
           
-          # 1. THE UNLOCK: Enable HID Gadget functions
+          # Enable NetHunter HID Gadget
           ./scripts/config --file out/.config \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_CONFIGFS_F_HID \
@@ -60,12 +66,7 @@ jobs:
             --enable CONFIG_USB_LIBCOMPOSITE \
             --enable CONFIG_USB_CONFIGFS
             
-          # 2. THE FIX: Disable the broken MediaTek Bluetooth Tag module causing the error
-          ./scripts/config --file out/.config \
-            --disable CONFIG_MTK_BT_TAG \
-            --disable CONFIG_MTK_BT_TAG_SUPPORT
-            
-          # 3. IDENTITY: Inject Motorola Magic IDs
+          # Motorola Identity Injection
           sed -i 's/CONFIG_USB_G_ANDROID_VID=.*/CONFIG_USB_G_ANDROID_VID=0x22b8/' out/.config
           sed -i 's/CONFIG_USB_G_ANDROID_PID=.*/CONFIG_USB_G_ANDROID_PID=0x2e76/' out/.config
           
@@ -74,6 +75,7 @@ jobs:
       - name: Compile Kernel
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          # Note: The build system automatically detects the 'techpack' folders
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- KCFLAGS="-w"
 
       - name: Package with AnyKernel3
