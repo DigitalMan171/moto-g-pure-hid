@@ -1,4 +1,4 @@
-name: Ellis Factory Sync - GitHub Native
+name: Ellis Factory Sync - Source Repair
 on:
   workflow_dispatch:
 
@@ -17,18 +17,20 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5
-          # OpenSSL 1.1 (Required for MediaTek 4.19 scripts)
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: 3. Block-Sync Toolchains & Build
+      - name: 3. Toolchain Sync & Source Patching
         run: |
-          # Pull exact Clang v11 (r383902) and GCC 4.9 from GitHub mirrors
           mkdir tc
           git clone --depth=1 https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902 tc/clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
+          
+          # --- SOURCE REPAIR BLOCK ---
+          # Fixing the 'undeclared identifier mtk_mmc_host' error by declaring it as an external pointer
+          sed -i '25i struct mmc_host *mtk_mmc_host[4];' kernel/drivers/char/rpmb/rpmb-mtk.c
           
           # Environment Setup
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
@@ -40,7 +42,6 @@ jobs:
           make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
           ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
-          # Build with Clang 11.0.1 (Matched to Ellis)
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -48,20 +49,17 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 4. Verify Driver Exclusion
+      - name: 4. Verify Driver
         run: |
           if [ -f "kernel/out/drivers/usb/gadget/function/f_hid.o" ]; then
-            echo "SUCCESS: Driver f_hid.o is present."
+            echo "SUCCESS: f_hid.o generated."
           else
-            echo "ERROR: Driver missing. Let's see if the source was scrubbed..."
-            grep -r "f_hid" kernel/drivers/usb/gadget/
+            echo "FAILED: Driver missing."
             exit 1
           fi
 
-      - name: 5. Upload Verified Kernel
+      - name: 5. Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-hid-verified
-          path: |
-            kernel/out/arch/arm64/boot/Image.gz
-            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
+          name: ellis-repaired-kernel
+          path: kernel/out/arch/arm64/boot/Image.gz
