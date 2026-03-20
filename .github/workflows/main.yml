@@ -20,17 +20,21 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: 2. Pull Source & Stock Hardware Maps
-        env:
-          MY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Clone the HawaiiPL Source
-          git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
-          
-          # Clone your PRIVATE hardware maps
-          git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
+      - name: 2. Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: motorola-MT6765-devs/kernel_motorola_hawaiipl
+          path: kernel
+          fetch-depth: 1
 
-      - name: 3. HawaiiPL Build (4.19.191+)
+      - name: 3. Checkout Private Hardware Maps
+        uses: actions/checkout@v4
+        with:
+          repository: DigitalMan171/Ellis-DTB
+          token: ${{ secrets.GIT_TOKEN }} 
+          path: dt_files
+
+      - name: 4. HawaiiPL Build (4.19.191+)
         run: |
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
@@ -38,17 +42,16 @@ jobs:
           
           cd kernel
           
-          # Force the '+' version string to match stock exactly
           export KBUILD_BUILD_VERSION=1
           touch .scmversion
           
           # 1. Load HawaiiPL Base Config
           make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          # 2. Set the stock version suffix
+          # 2. Match stock version suffix
           ./scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
           
-          # 3. Surgical Monolithic: Bake in HID & Display drivers
+          # 3. Surgical Monolithic: Bake in HID & Display
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
@@ -66,14 +69,15 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz
 
-      - name: 4. Package Artifacts
+      - name: 5. Package Artifacts
         run: |
           mkdir final_files
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
+          # Copying your verified hardware maps
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
-      - name: 5. Upload Final Build
+      - name: 6. Upload Final Build
         uses: actions/upload-artifact@v4
         with:
           name: ellis-nethunter-verified-bundle
