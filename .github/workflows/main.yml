@@ -1,62 +1,77 @@
-name: Ellis Engineering Build - Manual Env Setup
+name: Ellis Factory Build - Verification Run
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Source
+      - name: 1. Checkout Kernel Source
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           path: kernel
 
-      - name: Force Legacy Environment
+      - name: 2. Restore Factory Environment (Legacy Support)
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          # Install basic tools
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7
           
-          # Manually download OpenSSL 1.1 (Required for Ellis kernel scripts)
+          # Fix OpenSSL 1.1 (Required for MediaTek 4.19 signing/scripts)
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           
-          # Manually download ncurses5 for the 32-bit GCC compiler
+          # Fix ncurses5 (Required for AOSP GCC 4.9 binaries)
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
           sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
-
-          # Point 'python' to 2.7
+          
+          # Link Python 2.7 as the default 'python'
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: Fetch Factory Toolchains
+      - name: 3. Sync AOSP Pinned Toolchains
         run: |
-          mkdir -p toolchain
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b toolchain/clang
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 toolchain/gcc64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 toolchain/gcc32
+          mkdir tc
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b tc/clang
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: Production Build
+      - name: 4. Execute Kernel Compilation
         run: |
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang/bin:$GITHUB_WORKSPACE/toolchain/gcc64/bin:$GITHUB_WORKSPACE/toolchain/gcc32/bin:$PATH
+          export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
           cd kernel
-          # Setup Config with HID enabled
+          # Generate base config for Moto G Pure
           make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
-          scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
-          # Build
+          # Force Enable HID Drivers
+          ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
+          
+          # Final Build Command
           make -j$(nproc) O=$OUT ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- CC=clang Image.gz dtbs
 
-      - name: Upload
+      - name: 5. Verify Driver Inclusion
+        run: |
+          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
+          echo "Checking for compiled HID driver object..."
+          if find $OUT_DIR -name "f_hid.o" | grep -q "f_hid.o"; then
+            echo "SUCCESS: f_hid.o was successfully compiled into the kernel."
+            find $OUT_DIR -name "f_hid.o"
+          else
+            echo "ERROR: f_hid.o is missing. The driver was not included in the build."
+            exit 1
+          fi
+
+      - name: 6. Finalize and Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-kernel
-          path: kernel/out/arch/arm64/boot/Image.gz
+          name: ellis-verified-kernel
+          path: |
+            kernel/out/arch/arm64/boot/Image.gz
+            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
