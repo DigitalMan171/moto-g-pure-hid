@@ -27,34 +27,34 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Use the token to authenticate the clone and avoid the 'Username' prompt
-          git clone --depth=1 -b lineage-19.1 https://x-access-token:${GH_TOKEN}@github.com/LineageOS/android_kernel_motorola_mt6765 kernel
+          # The verified community repo for Motorola MT6765 devices
+          git clone --depth=1 -b lineage-19.1 https://x-access-token:${GH_TOKEN}@github.com/LineageOS/android_kernel_motorola_mgk kernel
           
-          # Setup Environment
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
           cd kernel
           
-          # Pick the correct config (ellis vs mt6765)
+          # Community trees often use 'mgk_64_k510_defconfig' or 'ellis_defconfig'
           if [ -f "arch/arm64/configs/ellis_defconfig" ]; then
-            make O=$OUT ARCH=arm64 ellis_defconfig
+            CONF="ellis_defconfig"
           else
-            make O=$OUT ARCH=arm64 mt6765_defconfig
+            CONF="mgk_64_k510_defconfig"
           fi
           
-          # NetHunter HID & USB Injection Configs
+          echo "Using Config: $CONF"
+          make O=$OUT ARCH=arm64 $CONF
+          
+          # NetHunter HID & Gadget Injection
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_F_HID \
             --enable CONFIG_USB_HID \
-            --enable CONFIG_HID_GENERIC \
-            --module CONFIG_ATH9K_HTC \
-            --module CONFIG_RTL8812AU
+            --enable CONFIG_HID_GENERIC
           
-          # Execute Build (Clang 11.0.1 / r383902)
+          # Final build command
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
