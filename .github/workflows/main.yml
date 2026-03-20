@@ -1,4 +1,4 @@
-name: Ellis NetHunter - HawaiiPL Final Alignment
+name: Ellis NetHunter - Hardware Verified Build
 on:
   workflow_dispatch:
 
@@ -20,52 +20,61 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: 2. HawaiiPL Official Build (Matching 4.19.191+)
+      - name: 2. Pull Source & Stock Hardware Maps
         env:
-          GH_TOKEN: ${{ github.token }}
+          MY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git clone --depth=1 https://x-access-token:${GH_TOKEN}@github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
+          # Clone the HawaiiPL Source
+          git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
           
+          # Clone your PRIVATE hardware maps
+          git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
+
+      - name: 3. HawaiiPL Build (4.19.191+)
+        run: |
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
           cd kernel
           
-          # Force the '+' version string by preventing git-suffixing and manually setting it
+          # Force the '+' version string to match stock exactly
           export KBUILD_BUILD_VERSION=1
           touch .scmversion
           
-          # Load Developer Config
+          # 1. Load HawaiiPL Base Config
           make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          # Match the exact stock version suffix
-          scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
+          # 2. Set the stock version suffix
+          ./scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
           
-          # Monolithic Alignment: Convert 'm' to 'y' for critical hardware
-          # This ensures drivers load even if the vendor modules are rejected
-          sed -i 's/=m/=y/g' $OUT/.config
-          
-          # NetHunter HID & USB Gadget Flags
-          scripts/config --file $OUT/.config \
+          # 3. Surgical Monolithic: Bake in HID & Display drivers
+          ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_F_HID \
             --enable CONFIG_USB_HID \
             --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_USB_KBD \
-            --enable CONFIG_USB_MOUSE
-          
-          # Final Compilation
+            --enable CONFIG_MTK_DISPLAY \
+            --enable CONFIG_INPUT_TOUCHSCREEN
+            
+          # 4. Compilation
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            Image.gz dtbs
+            Image.gz
 
-      - name: 3. Upload Kernel Artifact
+      - name: 4. Package Artifacts
+        run: |
+          mkdir final_files
+          cp kernel/out/arch/arm64/boot/Image.gz final_files/
+          cp dt_files/boot.img.img-dtb final_files/
+          cp dt_files/boot.img.img-dtb_offset final_files/
+
+      - name: 5. Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-nethunter-plus-fixed
-          path: kernel/out/arch/arm64/boot/Image.gz
+          name: ellis-nethunter-verified-bundle
+          path: final_files/
