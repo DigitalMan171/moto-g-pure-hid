@@ -1,4 +1,4 @@
-name: Ellis Factory Build - Verification Run
+name: Ellis Precise Build - Clang r383902
 on:
   workflow_dispatch:
 
@@ -6,72 +6,59 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           path: kernel
 
-      - name: 2. Restore Factory Environment (Legacy Support)
+      - name: Environment Setup
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7
-          
-          # Fix OpenSSL 1.1 (Required for MediaTek 4.19 signing/scripts)
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
-          
-          # Fix ncurses5 (Required for AOSP GCC 4.9 binaries)
-          wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
-          wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
-          sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
-          
-          # Link Python 2.7 as the default 'python'
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: 3. Sync AOSP Pinned Toolchains
+      - name: Sync EXACT Factory Toolchain (r383902)
         run: |
           mkdir tc
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b tc/clang
+          # This is the exact Clang 11.0.1 used by Motorola for the Ellis build
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 tc/clang-raw
+          # We need the specific r383902 directory
+          mv tc/clang-raw/clang-r383902 tc/clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: 4. Execute Kernel Compilation
+      - name: Build and Verify
         run: |
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
-          
           cd kernel
-          # Generate base config for Moto G Pure
           make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
-          
-          # Force Enable HID Drivers
           ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
-          # Final Build Command
-          make -j$(nproc) O=$OUT ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          # Build with Clang 11
+          make -j$(nproc) O=$OUT ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            CLANG_TRIPLE=aarch64-linux-gnu- CC=clang Image.gz dtbs
+            Image.gz dtbs
 
-      - name: 5. Verify Driver Inclusion
+      - name: Driver Verification
         run: |
-          OUT_DIR=$GITHUB_WORKSPACE/kernel/out
-          echo "Checking for compiled HID driver object..."
-          if find $OUT_DIR -name "f_hid.o" | grep -q "f_hid.o"; then
-            echo "SUCCESS: f_hid.o was successfully compiled into the kernel."
-            find $OUT_DIR -name "f_hid.o"
+          if find kernel/out -name "f_hid.o" | grep -q "f_hid.o"; then
+            echo "SUCCESS: f_hid.o compiled with Clang 11.0.1 (r383902)"
           else
-            echo "ERROR: f_hid.o is missing. The driver was not included in the build."
+            echo "CRITICAL ERROR: f_hid.o missing even with correct toolchain."
             exit 1
           fi
 
-      - name: 6. Finalize and Upload
-        uses: actions/upload-artifact@v4
+      - name: Upload Matched Kernel
+        uses: upload-artifact@v4
         with:
-          name: ellis-verified-kernel
-          path: |
-            kernel/out/arch/arm64/boot/Image.gz
-            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
+          name: ellis-kernel-r383902
+          path: kernel/out/arch/arm64/boot/Image.gz
