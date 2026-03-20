@@ -1,13 +1,10 @@
-name: Ellis Engineering Build - Absolute Factory Match
+name: Ellis Engineering Build - Legacy Environment Backport
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # Ubuntu 20.04 is the only environment that natively supports the 
-    # specific glibc and libssl versions required by MTK 4.19 scripts.
-    runs-on: ubuntu-20.04  
-
+    runs-on: ubuntu-22.04  # Modern runner, manually downgraded for compatibility
     steps:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
@@ -16,50 +13,54 @@ jobs:
           fetch-depth: 1
           path: kernel
 
-      - name: Pin Factory Toolchains (Exact AOSP Versions)
-        run: |
-          mkdir -p kernel/prebuilts/clang/host/linux-x86
-          mkdir -p kernel/prebuilts/gcc/linux-x86/aarch64
-          mkdir -p kernel/prebuilts/gcc/linux-x86/arm
-          
-          # Clang r416183b: The exact Android 11/12 Production Compiler
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b kernel/prebuilts/clang/host/linux-x86/clang-r416183b
-          
-          # GCC 4.9: Required for legacy MediaTek 32-bit compatibility and VDSO
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 kernel/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 kernel/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
-
-      - name: Match Host Environment (Python 2.7 & Legacy SSL)
+      - name: Manual Legacy Environment Setup
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           
-          # Install exact versions of build tools
-          # Python 2.7 is mandatory for MediaTek's 'conmakehash' and header scripts
-          sudo apt-get install -y \
-            python2.7 python-is-python2 \
-            build-essential bc bison flex libssl-dev libncurses5-dev \
-            libelf-dev libc6:i386 libstdc++6:i386 lib32z1 \
-            zip unzip tar curl wget
+          # 1. Install Modern Build Essentials
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 zip unzip tar curl wget
           
-          # Satisfy 32-bit ncurses for the cross-compiler binary
+          # 2. Backport OpenSSL 1.1 (Required for Kernel Signing/Scripts)
+          wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+          sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+          
+          # 3. Backport Python 2.7 (Required for MTK Header Generation)
+          sudo apt-get install -y python2.7
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python
+          sudo ln -sf /usr/bin/python2.7 /usr/bin/python2
+
+          # 4. Backport 32-bit ncurses5 (Required for the GCC 4.9 Binaries)
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.2-0ubuntu2_i386.deb
           wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.2-0ubuntu2_i386.deb
           sudo dpkg -i libtinfo5_6.2-0ubuntu2_i386.deb libncurses5_6.2-0ubuntu2_i386.deb
 
+      - name: Download Pinned Factory Toolchains
+        run: |
+          mkdir -p prebuilts/clang/host/linux-x86
+          mkdir -p prebuilts/gcc/linux-x86/aarch64
+          mkdir -p prebuilts/gcc/linux-x86/arm
+          
+          # Clang r416183b
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_kernel_linux-x86_clang-r416183b prebuilts/clang/host/linux-x86/clang-r416183b
+          # GCC 4.9 (64-bit and 32-bit)
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+
       - name: Execute Factory Build
         run: |
-          KERNEL_ROOT=$GITHUB_WORKSPACE/kernel
-          OUT_DIR=$KERNEL_ROOT/out
+          # ENVIRONMENT MAPPING
+          export KERNEL_ROOT=$GITHUB_WORKSPACE/kernel
+          export PREBUILTS=$GITHUB_WORKSPACE/prebuilts
+          export OUT_DIR=$KERNEL_ROOT/out
           mkdir -p $OUT_DIR
 
-          # Establish Factory Toolchain Priority in PATH
-          export CLANG_BIN=$KERNEL_ROOT/prebuilts/clang/host/linux-x86/clang-r416183b/bin
-          export GCC64_BIN=$KERNEL_ROOT/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
-          export GCC32_BIN=$KERNEL_ROOT/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin
+          export CLANG_BIN=$PREBUILTS/clang/host/linux-x86/clang-r416183b/bin
+          export GCC64_BIN=$PREBUILTS/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
+          export GCC32_BIN=$PREBUILTS/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin
           export PATH=$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH
 
-          # Hard-set Factory Compiler Flags
+          # FACTORY VARIABLES
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
@@ -72,7 +73,7 @@ jobs:
 
           cd kernel
 
-          # HID/Engineering Configuration Fragment
+          # HID/Engineering Fragment
           cat <<EOF > custom_ellis.config
           CONFIG_MTK_ENG_BUILD=y
           CONFIG_USB_G_HID=y
@@ -85,31 +86,25 @@ jobs:
           CONFIG_MTK_RPMB_SUPPORT=y
           EOF
 
-          # Step 1: Initialize Base Architecture
+          # BUILD SEQUENCE
           make O=$OUT_DIR ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE mgk_64_k510_defconfig
-
-          # Step 2: Merge Motorola Layer and Custom HID Layer
+          
           ./scripts/kconfig/merge_config.sh -O $OUT_DIR $OUT_DIR/.config \
             arch/arm64/configs/ext_config/moto-mgk_64_k510.config \
             custom_ellis.config
 
-          # Step 3: Resolve Dependency Chain (Olddefconfig)
           make O=$OUT_DIR ARCH=$ARCH LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 CC=clang CLANG_TRIPLE=$CLANG_TRIPLE olddefconfig
 
-          # Step 4: Final Factory Compilation
           make -j$(nproc) O=$OUT_DIR ARCH=$ARCH LLVM=1 LLVM_IAS=1 CROSS_COMPILE=$CROSS_COMPILE CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32 CC=clang HOSTCC=clang CLANG_TRIPLE=$CLANG_TRIPLE Image.gz dtbs
 
-      - name: Package & Verify
+      - name: Finalize Image
         run: |
           OUT_DIR=$GITHUB_WORKSPACE/kernel/out
-          # Find the exact MT6765 DTB used for the Ellis platform
           DTB_FILE=$(find $OUT_DIR/arch/arm64/boot/dts/ -name "*6765*.dtb" | head -n 1)
           cat $OUT_DIR/arch/arm64/boot/Image.gz "$DTB_FILE" > $OUT_DIR/arch/arm64/boot/Image.gz-dtb
-          
-          echo "Build Complete. Packaging $DTB_FILE with Image.gz"
 
-      - name: Upload Engineering Kernel
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-hid-factory-kernel
+          name: ellis-hid-custom-kernel
           path: kernel/out/arch/arm64/boot/Image.gz-dtb
