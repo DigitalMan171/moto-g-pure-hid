@@ -1,4 +1,4 @@
-name: Ellis Factory Sync - Source Repair
+name: Ellis Factory Build - RPMB Fixed
 on:
   workflow_dispatch:
 
@@ -17,31 +17,37 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5
+          # OpenSSL 1.1 is required for 4.19.191 build scripts
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: 3. Toolchain Sync & Source Patching
+      - name: 3. Toolchain & Source Repair Block
         run: |
+          # 3a. Sync Toolchains (GitHub Mirrors for speed/reliability)
           mkdir tc
           git clone --depth=1 https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902 tc/clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
           
-          # --- SOURCE REPAIR BLOCK ---
-          # Fixing the 'undeclared identifier mtk_mmc_host' error by declaring it as an external pointer
-          sed -i '25i struct mmc_host *mtk_mmc_host[4];' kernel/drivers/char/rpmb/rpmb-mtk.c
+          # 3b. Apply the RPMB "Dummy Array" Fix
+          # This resolves the 'undeclared identifier mtk_mmc_host' error common in MTK GPL releases.
+          echo "Patching drivers/char/rpmb/rpmb-mtk.c..."
+          sed -i '30i struct mmc_host *mtk_mmc_host[4];' kernel/drivers/char/rpmb/rpmb-mtk.c
           
-          # Environment Setup
+          # 3c. Set Environment Variables
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
-          # Build Execution
+          # 3d. Build Execution
           cd kernel
           make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
+          
+          # Enable HID Drivers in the generated .config
           ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
+          # Final Compile using exact Clang 11 and matched Cross-Compilers
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -49,17 +55,20 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 4. Verify Driver
+      - name: 4. Verify Success
         run: |
           if [ -f "kernel/out/drivers/usb/gadget/function/f_hid.o" ]; then
-            echo "SUCCESS: f_hid.o generated."
+            echo "SUCCESS: HID Driver was compiled into the kernel."
           else
-            echo "FAILED: Driver missing."
+            echo "ERROR: Kernel built but f_hid.o is missing. Checking Makefile..."
+            grep "f_hid" kernel/drivers/usb/gadget/function/Makefile
             exit 1
           fi
 
-      - name: 5. Upload Artifacts
+      - name: 5. Upload Repaired Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-repaired-kernel
-          path: kernel/out/arch/arm64/boot/Image.gz
+          name: ellis-fixed-hid-kernel
+          path: |
+            kernel/out/arch/arm64/boot/Image.gz
+            kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
