@@ -28,7 +28,7 @@ jobs:
         env:
           MY_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
-          # Using manual clone with token to bypass "Not Found" errors
+          # Manual clone using the token in the URL to bypass API visibility issues
           git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
 
       - name: 4. HawaiiPL Build (4.19.191+)
@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir final_files
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
-          # Copying your verified hardware maps from the dt_files directory
+          # Utilizing verified files from the DigitalMan171/Ellis-DTB clone
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
