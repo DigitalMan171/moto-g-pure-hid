@@ -24,13 +24,21 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
 
-      - name: 3. Pull Hardware Maps (Auth Header Fix)
+      - name: 3. Pull Hardware Maps (Using DTBTOKEN)
         env:
-          MY_TOKEN: ${{ secrets.GIT_TOKEN }}
+          MY_TOKEN: ${{ secrets.DTBTOKEN }}
         run: |
-          # Force a basic auth header to stop Git from requesting write permissions
-          git clone -c "http.extraHeader=Authorization: Basic $(echo -n x-access-token:${MY_TOKEN} | base64)" \
-            https://github.com/DigitalMan171/Ellis-DTB dt_files
+          mkdir -p dt_files
+          # Direct pull from private repo using the updated secret name
+          curl -H "Authorization: token ${MY_TOKEN}" \
+               -H "Accept: application/vnd.github.v3.raw" \
+               -L "https://raw.githubusercontent.com/DigitalMan171/Ellis-DTB/main/boot.img.img-dtb" \
+               -o dt_files/boot.img.img-dtb
+          
+          curl -H "Authorization: token ${MY_TOKEN}" \
+               -H "Accept: application/vnd.github.v3.raw" \
+               -L "https://raw.githubusercontent.com/DigitalMan171/Ellis-DTB/main/boot.img.img-dtb_offset" \
+               -o dt_files/boot.img.img-dtb_offset
 
       - name: 4. HawaiiPL Build (4.19.191+)
         run: |
@@ -43,13 +51,13 @@ jobs:
           export KBUILD_BUILD_VERSION=1
           touch .scmversion
           
-          # 1. Load HawaiiPL Base Config
+          # Load HawaiiPL Config
           make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          # 2. Match stock version suffix exactly (+)
+          # Force stock version suffix (+)
           ./scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
           
-          # 3. Surgical Monolithic: Force HID & Display into the core Image
+          # Inject NetHunter HID Drivers
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
@@ -59,7 +67,7 @@ jobs:
             --enable CONFIG_MTK_DISPLAY \
             --enable CONFIG_INPUT_TOUCHSCREEN
             
-          # 4. Compilation
+          # Compile
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -70,9 +78,7 @@ jobs:
       - name: 5. Package Artifacts
         run: |
           mkdir final_files
-          # New Kernel
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
-          # Verified Hardware Maps from your private repo
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
