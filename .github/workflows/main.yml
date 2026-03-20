@@ -1,4 +1,4 @@
-name: Ellis NetHunter Build - LineageOS Base
+name: Ellis NetHunter Build
 on:
   workflow_dispatch:
 
@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Checkout LineageOS Kernel (Ellis)
+      - name: 1. Checkout Verified LineageOS Kernel
         uses: actions/checkout@v4
         with:
           repository: LineageOS/android_kernel_motorola_mt6765
@@ -22,7 +22,7 @@ jobs:
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: 3. Toolchain & NetHunter Patching
+      - name: 3. Toolchain Sync & NetHunter Patching
         run: |
           mkdir tc
           git clone --depth=1 https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902 tc/clang
@@ -35,24 +35,25 @@ jobs:
           mkdir -p $OUT
           
           cd kernel
-          # Load the official Ellis configuration from the Lineage tree
+          # Ellis uses the mt6765_defconfig or ellis_defconfig in Lineage
           make O=$OUT ARCH=arm64 ellis_defconfig
           
-          # APPLY NETHUNTER USB HID & WIFI INJECTION PATCHES (Via Config)
-          echo "Injecting NetHunter HID & Injection support..."
+          # NetHunter HID & USB Injection Patching
+          echo "Applying NetHunter HID support..."
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_F_HID \
+            --enable CONFIG_USB_HID \
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_USB_KBD \
+            --enable CONFIG_USB_MOUSE \
             --enable CONFIG_MAC80211 \
             --enable CONFIG_CFG80211 \
-            --enable CONFIG_CFG80211_WEXT \
-            --enable CONFIG_MAC80211_HWSIM \
             --module CONFIG_ATH9K_HTC \
-            --module CONFIG_RTL8187 \
-            --module CONFIG_RTL8812AU
+            --module CONFIG_RTL8187
           
-          # Build Execution
+          # Build with Clang 11 (Factory Match)
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -60,18 +61,17 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 4. Verification
+      - name: 4. Verify NetHunter Compatibility
         run: |
           if [ -f "kernel/out/arch/arm64/boot/Image.gz" ]; then
-            echo "SUCCESS: NetHunter-ready Kernel compiled."
-            # Verify the HID module was actually linked
+            echo "Build Successful. Checking HID nodes..."
             grep "CONFIG_USB_CONFIGFS_F_HID=y" kernel/out/.config
           else
-            echo "FAILED: Build did not complete."
+            echo "Build failed to generate Image.gz"
             exit 1
           fi
 
-      - name: 5. Upload Artifacts
+      - name: 5. Upload NetHunter Kernel
         uses: actions/upload-artifact@v4
         with:
           name: ellis-nethunter-kernel
