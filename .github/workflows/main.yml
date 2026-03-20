@@ -24,11 +24,11 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
 
-      - name: 3. Pull Hardware Maps (Private Repo)
+      - name: 3. Pull Hardware Maps (Read-Only)
         env:
           MY_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
-          # Manual clone using the token in the URL to bypass API visibility issues
+          # Pulling files from the private repo into the runner's temporary memory
           git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
 
       - name: 4. HawaiiPL Build (4.19.191+)
@@ -39,14 +39,13 @@ jobs:
           
           cd kernel
           
-          # Force the '+' version string to match stock exactly
           export KBUILD_BUILD_VERSION=1
           touch .scmversion
           
           # 1. Load HawaiiPL Base Config
           make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          # 2. Match stock version suffix
+          # 2. Match stock version suffix exactly
           ./scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
           
           # 3. Surgical Monolithic: Bake in HID & Display
@@ -71,11 +70,11 @@ jobs:
         run: |
           mkdir final_files
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
-          # Utilizing verified files from the DigitalMan171/Ellis-DTB clone
+          # Copying the pulled DTB files for the user to download
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
-      - name: 6. Upload Final Build
+      - name: 6. Upload Final Bundle
         uses: actions/upload-artifact@v4
         with:
           name: ellis-nethunter-verified-bundle
