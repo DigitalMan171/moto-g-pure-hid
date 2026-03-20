@@ -1,4 +1,4 @@
-name: Ellis Precise Build - Clang r383902
+name: Ellis Factory Sync - Clang r383902
 on:
   workflow_dispatch:
 
@@ -6,59 +6,80 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout Source
+      - name: 1. Checkout Source
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
           path: kernel
 
-      - name: Environment Setup
+      - name: 2. Factory Library Sync
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7
+          # Install the 32-bit libs and build essentials required for MTK 4.19
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5
+          
+          # Match OpenSSL version for kernel signing
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+          
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: Sync EXACT Factory Toolchain (r383902)
+      - name: 3. Targeted Toolchain Pull (Clang r383902)
         run: |
-          mkdir tc
-          # This is the exact Clang 11.0.1 used by Motorola for the Ellis build
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 tc/clang-raw
-          # We need the specific r383902 directory
-          mv tc/clang-raw/clang-r383902 tc/clang
+          mkdir -p tc/clang
+          # We use a specific mirror to pull ONLY the version found on your phone
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r383902.tar.gz
+          tar -C tc/clang -xzf clang-r383902.tar.gz
+          
+          # Pull the matching GCC 4.9 cross-compilers
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: Build and Verify
+      - name: 4. Factory Build Execution
         run: |
-          export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
+          # Define paths exactly as the MTK build system expects
+          export CLANG_PATH=$GITHUB_WORKSPACE/tc/clang/bin
+          export GCC64_PATH=$GITHUB_WORKSPACE/tc/gcc64/bin
+          export GCC32_PATH=$GITHUB_WORKSPACE/tc/gcc32/bin
+          export PATH=$CLANG_PATH:$GCC64_PATH:$GCC32_PATH:$PATH
+          
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
-          cd kernel
-          make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
-          ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
-          # Build with Clang 11
+          cd kernel
+          # Initialize Ellis config
+          make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
+          
+          # Inject HID support into the generated config
+          scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
+          
+          # Build using the exact Clang + LLD version from your Termux screenshot
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-android- \
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: Driver Verification
+      - name: 5. Verify Driver Object
         run: |
-          if find kernel/out -name "f_hid.o" | grep -q "f_hid.o"; then
-            echo "SUCCESS: f_hid.o compiled with Clang 11.0.1 (r383902)"
+          if [ -f "kernel/out/drivers/usb/gadget/function/f_hid.o" ]; then
+            echo "SUCCESS: Driver f_hid.o generated successfully."
           else
-            echo "CRITICAL ERROR: f_hid.o missing even with correct toolchain."
+            echo "FAILED: Driver was skipped. Checking Makefile logic..."
+            grep "f_hid" kernel/drivers/usb/gadget/function/Makefile
             exit 1
           fi
 
-      - name: Upload Matched Kernel
+      - name: 6. Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-kernel-r383902
+          name: ellis-factory-match-kernel
           path: kernel/out/arch/arm64/boot/Image.gz
