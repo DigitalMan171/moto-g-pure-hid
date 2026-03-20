@@ -58,7 +58,7 @@ jobs:
           fi
 
       - name: Upload Matched Kernel
-        uses: upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: ellis-kernel-r383902
           path: kernel/out/arch/arm64/boot/Image.gz
