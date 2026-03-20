@@ -1,4 +1,4 @@
-name: Ellis NetHunter - Authenticated Sync
+name: Ellis NetHunter - HawaiiPL Specialized Base
 on:
   workflow_dispatch:
 
@@ -12,23 +12,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5 curl git
           
-          # OpenSSL 1.1 Support
+          # Fix OpenSSL 1.1 (Required for 4.19 build scripts)
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
           
-          # Toolchain Sync
+          # Sync Clang 11.0.1 (Factory Match r383902)
           mkdir tc
           git clone --depth=1 https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902 tc/clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: 2. Authenticated Clone & Build Block
+      - name: 2. Source Sync & NetHunter Patch Block
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The verified community repo for Motorola MT6765 devices
-          git clone --depth=1 -b lineage-19.1 https://x-access-token:${GH_TOKEN}@github.com/LineageOS/android_kernel_motorola_mgk kernel
+          # Specialized HawaiiPL tree (Verified for Moto G Pure)
+          git clone --depth=1 https://x-access-token:${GH_TOKEN}@github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
           
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
@@ -36,25 +36,29 @@ jobs:
           
           cd kernel
           
-          # Community trees often use 'mgk_64_k510_defconfig' or 'ellis_defconfig'
-          if [ -f "arch/arm64/configs/ellis_defconfig" ]; then
-            CONF="ellis_defconfig"
-          else
-            CONF="mgk_64_k510_defconfig"
-          fi
+          # Load the specialized HawaiiPL configuration
+          # This config already contains many community fixes for this chipset
+          make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          echo "Using Config: $CONF"
-          make O=$OUT ARCH=arm64 $CONF
-          
-          # NetHunter HID & Gadget Injection
+          # Apply Kali NetHunter HID & WiFi Injection Flags
+          # Note: 4.x Kernels use ConfigFS for HID, so no manual code edits are usually needed
+          echo "Injecting NetHunter Config Flags..."
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_F_HID \
             --enable CONFIG_USB_HID \
-            --enable CONFIG_HID_GENERIC
+            --enable CONFIG_HID_GENERIC \
+            --enable CONFIG_USB_KBD \
+            --enable CONFIG_USB_MOUSE \
+            --enable CONFIG_MAC80211 \
+            --enable CONFIG_CFG80211 \
+            --enable CONFIG_CFG80211_WEXT \
+            --module CONFIG_ATH9K_HTC \
+            --module CONFIG_RTL8187 \
+            --module CONFIG_RTL8812AU
           
-          # Final build command
+          # Build Execution
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -62,11 +66,19 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 3. Artifact Upload
-        if: success()
+      - name: 3. Verify Result
+        run: |
+          if [ -f "kernel/out/arch/arm64/boot/Image.gz" ]; then
+            echo "NetHunter-Ready Kernel Build Success."
+          else
+            echo "Build failed. Inspect logs for compiler errors."
+            exit 1
+          fi
+
+      - name: 4. Upload Final Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-nethunter-kernel
+          name: ellis-nethunter-hawaiipl
           path: |
             kernel/out/arch/arm64/boot/Image.gz
             kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
