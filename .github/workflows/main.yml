@@ -24,12 +24,13 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
 
-      - name: 3. Pull Hardware Maps (Read-Only)
+      - name: 3. Pull Hardware Maps (Auth Header Fix)
         env:
           MY_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
-          # Pulling files from the private repo into the runner's temporary memory
-          git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
+          # Force a basic auth header to stop Git from requesting write permissions
+          git clone -c "http.extraHeader=Authorization: Basic $(echo -n x-access-token:${MY_TOKEN} | base64)" \
+            https://github.com/DigitalMan171/Ellis-DTB dt_files
 
       - name: 4. HawaiiPL Build (4.19.191+)
         run: |
@@ -45,10 +46,10 @@ jobs:
           # 1. Load HawaiiPL Base Config
           make O=$OUT ARCH=arm64 hawaiipl-perd_defconfig
           
-          # 2. Match stock version suffix exactly
+          # 2. Match stock version suffix exactly (+)
           ./scripts/config --file $OUT/.config --set-str CONFIG_LOCALVERSION "+"
           
-          # 3. Surgical Monolithic: Bake in HID & Display
+          # 3. Surgical Monolithic: Force HID & Display into the core Image
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
@@ -69,8 +70,9 @@ jobs:
       - name: 5. Package Artifacts
         run: |
           mkdir final_files
+          # New Kernel
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
-          # Copying the pulled DTB files for the user to download
+          # Verified Hardware Maps from your private repo
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
