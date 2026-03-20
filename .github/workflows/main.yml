@@ -21,18 +21,15 @@ jobs:
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
       - name: 2. Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          repository: motorola-MT6765-devs/kernel_motorola_hawaiipl
-          path: kernel
-          fetch-depth: 1
+        run: |
+          git clone --depth=1 https://github.com/motorola-MT6765-devs/kernel_motorola_hawaiipl kernel
 
-      - name: 3. Checkout Private Hardware Maps
-        uses: actions/checkout@v4
-        with:
-          repository: DigitalMan171/Ellis-DTB
-          token: ${{ secrets.GIT_TOKEN }} 
-          path: dt_files
+      - name: 3. Pull Hardware Maps (Private Repo)
+        env:
+          MY_TOKEN: ${{ secrets.GIT_TOKEN }}
+        run: |
+          # Using manual clone with token to bypass "Not Found" errors
+          git clone https://x-access-token:${MY_TOKEN}@github.com/DigitalMan171/Ellis-DTB dt_files
 
       - name: 4. HawaiiPL Build (4.19.191+)
         run: |
@@ -42,6 +39,7 @@ jobs:
           
           cd kernel
           
+          # Force the '+' version string to match stock exactly
           export KBUILD_BUILD_VERSION=1
           touch .scmversion
           
@@ -73,7 +71,7 @@ jobs:
         run: |
           mkdir final_files
           cp kernel/out/arch/arm64/boot/Image.gz final_files/
-          # Copying your verified hardware maps
+          # Copying your verified hardware maps from the dt_files directory
           cp dt_files/boot.img.img-dtb final_files/
           cp dt_files/boot.img.img-dtb_offset final_files/
 
