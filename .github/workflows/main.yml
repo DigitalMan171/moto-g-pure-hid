@@ -1,4 +1,4 @@
-name: Ellis NetHunter - Block Sync
+name: Ellis NetHunter - Authenticated Sync
 on:
   workflow_dispatch:
 
@@ -8,58 +8,53 @@ jobs:
     steps:
       - name: 1. Setup Environment & Toolchains
         run: |
-          # Install dependencies
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5 curl
+          sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5 curl git
           
-          # Fix OpenSSL and Python
+          # OpenSSL 1.1 Support
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
           
-          # Block Sync Toolchains
+          # Toolchain Sync
           mkdir tc
           git clone --depth=1 https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902 tc/clang
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
 
-      - name: 2. Manual Source Clone & Build Block
+      - name: 2. Authenticated Clone & Build Block
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # MANUALLY CLONE KERNEL (Using the verified MT6765 common tree for Ellis)
-          git clone --depth=1 -b lineage-19.1 https://github.com/LineageOS/android_kernel_motorola_mt6765 kernel
+          # Use the token to authenticate the clone and avoid the 'Username' prompt
+          git clone --depth=1 -b lineage-19.1 https://x-access-token:${GH_TOKEN}@github.com/LineageOS/android_kernel_motorola_mt6765 kernel
           
-          # Set Paths
+          # Setup Environment
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
           cd kernel
           
-          # Configure for Ellis
-          # If 'ellis_defconfig' fails, we will fallback to 'mt6765_defconfig'
+          # Pick the correct config (ellis vs mt6765)
           if [ -f "arch/arm64/configs/ellis_defconfig" ]; then
             make O=$OUT ARCH=arm64 ellis_defconfig
           else
             make O=$OUT ARCH=arm64 mt6765_defconfig
           fi
           
-          # Inject NetHunter HID/USB Flags
-          echo "Injecting USB Gadget and NetHunter HID configs..."
+          # NetHunter HID & USB Injection Configs
           ./scripts/config --file $OUT/.config \
             --enable CONFIG_USB_CONFIGFS_F_HID \
             --enable CONFIG_USB_G_HID \
             --enable CONFIG_USB_F_HID \
             --enable CONFIG_USB_HID \
             --enable CONFIG_HID_GENERIC \
-            --enable CONFIG_USB_KBD \
-            --enable CONFIG_USB_MOUSE \
-            --enable CONFIG_MAC80211 \
-            --enable CONFIG_CFG80211 \
             --module CONFIG_ATH9K_HTC \
-            --module CONFIG_RTL8187
+            --module CONFIG_RTL8812AU
           
-          # Build with Clang 11.0.1 (r383902)
+          # Execute Build (Clang 11.0.1 / r383902)
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -67,19 +62,11 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 3. Verify & Upload
-        run: |
-          if [ -f "kernel/out/arch/arm64/boot/Image.gz" ]; then
-            echo "NetHunter Kernel Build Success."
-          else
-            echo "Build failed. Check logs for compiler errors."
-            exit 1
-          fi
-
-      - name: 4. Final Artifact Upload
+      - name: 3. Artifact Upload
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-nethunter-final
+          name: ellis-nethunter-kernel
           path: |
             kernel/out/arch/arm64/boot/Image.gz
             kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
