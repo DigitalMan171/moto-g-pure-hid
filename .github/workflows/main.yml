@@ -1,4 +1,4 @@
-name: Ellis Factory Sync - GitHub Mirror
+name: Ellis Factory Sync - Block Format
 on:
   workflow_dispatch:
 
@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - name: 1. Checkout Kernel Source
+      - name: 1. Checkout Source
         uses: actions/checkout@v4
         with:
           repository: MotorolaMobilityLLC/kernel-mtk
@@ -17,37 +17,35 @@ jobs:
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libelf-dev libc6:i386 libstdc++6:i386 lib32z1 wget python2.7 libncurses5
-          
-          # OpenSSL 1.1 (Crucial for MTK 4.19.191 signature scripts)
           wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
           sudo dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb
-          
           sudo ln -sf /usr/bin/python2.7 /usr/bin/python
 
-      - name: 3. Sync Toolchains from GitHub Mirrors
+      - name: 3. Toolchain & Build Block
         run: |
-          mkdir tc
-          # Pulling Clang 11.0.1 (r383902) from a reliable mirror
-          git clone --depth=1 https://github.com/Tera-Rom/p_p_c_h_l-x86_clang-r383902 tc/clang
+          # Create toolchain directory
+          mkdir -p tc/clang
           
-          # Pulling GCC 4.9 (64-bit and 32-bit)
+          # Download Clang r383902 (v11.0.1) from a stable AOSP mirror
+          # We use a direct tarball to avoid 'Username' prompts and speed up the VM
+          curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r383902.tar.gz -o clang.tar.gz
+          tar -C tc/clang -xzf clang.tar.gz
+          
+          # Pull GCC 4.9 cross-compilers (Public LineageOS Mirrors)
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 tc/gcc64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 tc/gcc32
-
-      - name: 4. Factory Build Execution
-        run: |
+          
+          # SET ENVIRONMENT
           export PATH=$GITHUB_WORKSPACE/tc/clang/bin:$GITHUB_WORKSPACE/tc/gcc64/bin:$GITHUB_WORKSPACE/tc/gcc32/bin:$PATH
           export OUT=$GITHUB_WORKSPACE/kernel/out
           mkdir -p $OUT
           
+          # EXECUTE BUILD
           cd kernel
-          # Apply the Ellis default configuration
           make O=$OUT ARCH=arm64 mgk_64_k510_defconfig
-          
-          # Inject HID Gadget Config
           ./scripts/config --file $OUT/.config --enable CONFIG_USB_G_HID --enable CONFIG_USB_CONFIGFS_F_HID
           
-          # Execute compile using the toolchain pathing
+          # Compile using Clang 11 and matched binutils
           make -j$(nproc) O=$OUT ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
@@ -55,21 +53,20 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-androideabi- \
             Image.gz dtbs
 
-      - name: 5. Verify Driver Inclusion
+      - name: 4. Verify Driver & Artifacts
         run: |
-          echo "Scanning for compiled HID object..."
           if [ -f "kernel/out/drivers/usb/gadget/function/f_hid.o" ]; then
             echo "SUCCESS: f_hid.o was successfully compiled."
           else
-            echo "ERROR: Driver missing. Listing Makefile for HID status..."
-            cat kernel/drivers/usb/gadget/function/Makefile | grep "hid"
+            echo "ERROR: Driver missing. This confirms a Makefile exclusion."
+            grep -r "f_hid" kernel/drivers/usb/gadget/
             exit 1
           fi
 
-      - name: 6. Upload
+      - name: 5. Upload Verified Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: ellis-github-match-kernel
+          name: ellis-hid-verified
           path: |
             kernel/out/arch/arm64/boot/Image.gz
             kernel/out/arch/arm64/boot/dts/mediatek/*.dtb
